@@ -111,7 +111,10 @@ LLM이 원인(cause)과 조치(action)를 올바른 형식으로 반환하도록
 
 ## 로컬 실행 (개발 환경 MAC)
 
-### 1. 사전 준비
+처음 세팅하는 경우 1~3을 순서대로 진행.
+이미 세팅된 경우 4번(서버 실행)만 하면 됨.
+
+### 1. 사전 준비 (최초 1회)
 
 ```bash
 # Ollama 설치
@@ -126,15 +129,16 @@ mkdir -p /opt/homebrew/etc/mosquitto
 echo "listener 1883\nallow_anonymous true" > /opt/homebrew/etc/mosquitto/mosquitto.conf
 ```
 
-### 2. Python 환경 설정
+### 2. Python 환경 설정 (최초 1회)
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+cd ~/Desktop/sram_llm
+python3 -m venv venv_new
+source venv_new/bin/activate
 pip install fastapi uvicorn httpx ollama paho-mqtt websockets 'uvicorn[standard]' psycopg2-binary
 ```
 
-### 3. 환경변수 설정
+### 3. 환경변수 설정 (최초 1회)
 
 ```bash
 cp .env.example .env
@@ -143,16 +147,42 @@ cp .env.example .env
 
 ### 4. 서버 실행 (터미널 3개)
 
+**터미널 1 — Ollama**
 ```bash
-# 터미널 1: Ollama
 ollama serve
+```
 
-# 터미널 2: LLM 서버
-source venv/bin/activate
-uvicorn server:app --reload
+**터미널 2 — LLM 서버**
+```bash
+cd ~/Desktop/sram_llm
+source venv_new/bin/activate
+uvicorn server:app --reload --reload-exclude 'venv*'
+```
 
-# 터미널 3: MQTT 브로커
+**터미널 3 — MQTT 브로커**
+```bash
 /opt/homebrew/opt/mosquitto/sbin/mosquitto -c /opt/homebrew/etc/mosquitto/mosquitto.conf
+```
+
+### 5. 작동 확인
+
+서버가 정상적으로 떴는지 아래 명령어로 테스트:
+
+```bash
+curl -X POST http://localhost:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"error_type": "collision", "force_x_max": 150}}'
+```
+
+**정상 응답 예시:**
+```json
+{
+  "threat": true,
+  "level": "DANGER",
+  "cause": "Severe collision detected, dangerously high force.",
+  "action": "Immediate shutdown and full mechanical inspection required.",
+  "input": {"error_type": "collision", "force_x_max": 150}
+}
 ```
 
 > Mac에서는 PostgreSQL 없어도 서버 정상 작동 (DB 연결 실패 시 경고 로그만 출력)
