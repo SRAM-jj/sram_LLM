@@ -1,5 +1,22 @@
+# 환경변수 (IP 주소 등 민감 정보)
+.env
+
+# Python
 venv/
+venv_new/
 __pycache__/
 *.pyc
 .DS_Store
+
+# 데이터셋
 ai4i2020.csv
+
+# 모델 파일 (용량 큼)
+sram_model/
+sram_model_fp16/
+sram_model_f16.gguf
+sram_model_q4.gguf
+adapters/
+
+# 학습 데이터 (용량 큼)
+training_data/
