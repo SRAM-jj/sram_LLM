@@ -41,7 +41,9 @@
 ## 프로젝트 구조
 ```
 sram_llm/
-├── server.py                  # FastAPI 메인 서버 (AI 분석 + MQTT 긴급정지)
+├── server.py                  # FastAPI 메인 서버 (AI 분석 + API 엔드포인트)
+├── database.py                # PostgreSQL 연결, 테이블 생성, 로그 저장
+├── mqtt_client.py             # MQTT 긴급정지 명령 전송 (Raspberry Pi)
 ├── .env.example               # 환경변수 설정 예시(배포할때 ip 채우기)
 ├── prepare_training_data.py   # 데이터셋 → 학습용 JSONL 변환 스크립트
 ├── finetune.sh                # MLX 파인튜닝 실행 스크립트 (Mac M-series용)
@@ -273,10 +275,11 @@ LLM_MODEL=sram-ai   # 파인튜닝된 커스텀 모델
 | cause | TEXT | LLM이 판단한 원인 |
 | action | TEXT | LLM이 제안한 조치 |
 
-**DB 관련 파일 구조:**
+**파일 역할 분리:**
 ```
-server.py      # API 서버 (DB 연동은 database.py에 위임)
-database.py    # DB 연결, 테이블 생성, 저장 함수 분리
+server.py      # API 엔드포인트 + LLM 분석 흐름
+database.py    # DB 연결, 테이블 생성, 저장
+mqtt_client.py # MQTT 긴급정지 전송
 ```
 
 ### 미구현 (추후 작업)

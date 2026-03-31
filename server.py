@@ -7,13 +7,10 @@ import os
 from datetime import datetime
 import httpx
 import asyncio
-import paho.mqtt.client as mqtt
 from database import init_db, save_to_db
+from mqtt_client import emergency_stop
 
 # ── 환경변수 설정 ─────────────────────────────────────────────
-MQTT_BROKER    = os.getenv("MQTT_BROKER", "localhost")
-MQTT_PORT      = int(os.getenv("MQTT_PORT", "1883"))
-MQTT_TOPIC     = os.getenv("MQTT_TOPIC", "sram/emergency_stop")
 DASHBOARD_URL  = os.getenv("DASHBOARD_URL", "http://localhost:8001")
 LLM_MODEL      = os.getenv("LLM_MODEL", "llama3.1:8b")
 
@@ -80,22 +77,6 @@ def notify_dashboard(result: dict):
         httpx.post(f"{DASHBOARD_URL}/notify", json=result, timeout=2)
     except:
         pass
-
-def emergency_stop():
-    logger.critical("🛑 로봇 긴급 정지 명령 전송 중...")
-    try:
-        client = mqtt.Client()
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
-        payload = json.dumps({
-            "command": "EMERGENCY_STOP",
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "reason": "ERROR threat detected by S.RAM! AI"
-        })
-        client.publish(MQTT_TOPIC, payload)
-        client.disconnect()
-        logger.critical("🛑 긴급 정지 명령 전송 완료!")
-    except Exception as e:
-        logger.critical(f"🛑 긴급 정지 명령 전송 실패: {e}")
 
 # ── API ───────────────────────────────────────────────────────
 @app.post("/analyze")
