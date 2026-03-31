@@ -8,19 +8,83 @@ from datetime import datetime
 import httpx
 import asyncio
 import paho.mqtt.client as mqtt
+import psycopg2
+from psycopg2.extras import Json
 
 # ── 환경변수 설정 ─────────────────────────────────────────────
-# .env 파일 또는 시스템 환경변수로 주입
-MQTT_BROKER    = os.getenv("MQTT_BROKER", "localhost")       # Raspberry Pi IP
+MQTT_BROKER    = os.getenv("MQTT_BROKER", "localhost")
 MQTT_PORT      = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_TOPIC     = os.getenv("MQTT_TOPIC", "sram/emergency_stop")
-DASHBOARD_URL  = os.getenv("DASHBOARD_URL", "http://localhost:8001")  # Tier3 Ubuntu IP
+DASHBOARD_URL  = os.getenv("DASHBOARD_URL", "http://localhost:8001")
 LLM_MODEL      = os.getenv("LLM_MODEL", "llama3.1:8b")
+
+DB_HOST        = os.getenv("DB_HOST", "localhost")
+DB_PORT        = os.getenv("DB_PORT", "5432")
+DB_NAME        = os.getenv("DB_NAME", "sram")
+DB_USER        = os.getenv("DB_USER", "sram_user")
+DB_PASSWORD    = os.getenv("DB_PASSWORD", "")
 
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("S.RAM!")
 
+# ── DB 초기화 ─────────────────────────────────────────────────
+def get_db():
+    return psycopg2.connect(
+        host=DB_HOST, port=DB_PORT,
+        dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD
+    )
+
+def init_db():
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS threat_logs (
+                id          SERIAL PRIMARY KEY,
+                timestamp   TIMESTAMP DEFAULT NOW(),
+                level       VARCHAR(10) NOT NULL,
+                error_type  VARCHAR(100),
+                force_x_max FLOAT,
+                input_data  JSONB,
+                cause       TEXT,
+                action      TEXT
+            )
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info("✅ DB 초기화 완료")
+    except Exception as e:
+        logger.warning(f"⚠️ DB 연결 실패 (Ubuntu 배포 시 설정 필요): {e}")
+
+def save_to_db(level: str, result: dict, input_data: dict):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO threat_logs (level, error_type, force_x_max, input_data, cause, action)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            level,
+            input_data.get("error_type"),
+            input_data.get("force_x_max"),
+            Json(input_data),
+            result.get("cause"),
+            result.get("action")
+        ))
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info("💾 DB 저장 완료")
+    except Exception as e:
+        logger.warning(f"⚠️ DB 저장 실패: {e}")
+
+@app.on_event("startup")
+async def startup():
+    init_db()
+
+# ── 프롬프트 ──────────────────────────────────────────────────
 class ErrorData(BaseModel):
     data: dict
 
@@ -51,6 +115,7 @@ Input: {json.dumps(data)}
 Output:
 """
 
+# ── 위협 레벨 처리 ────────────────────────────────────────────
 def handle_threat_level(level: str, result: dict):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -91,6 +156,7 @@ def emergency_stop():
     except Exception as e:
         logger.critical(f"🛑 긴급 정지 명령 전송 실패: {e}")
 
+# ── API ───────────────────────────────────────────────────────
 @app.post("/analyze")
 async def analyze(error: ErrorData):
     prompt = build_prompt(error.data)
@@ -115,7 +181,7 @@ async def analyze(error: ErrorData):
 
         result["input"] = error.data
 
-        # 규칙 기반 레벨 보정 (force_x_max 기준 강제 적용)
+        # 규칙 기반 레벨 보정
         force_x_max = error.data.get("force_x_max")
         if force_x_max is not None:
             if force_x_max < 100:
@@ -127,6 +193,8 @@ async def analyze(error: ErrorData):
 
         level = result.get("level", "UNKNOWN")
         handle_threat_level(level, result)
+        save_to_db(level, result, error.data)
+
     except json.JSONDecodeError:
         result = {"raw": raw, "parse_error": "LLM did not return valid JSON"}
 
