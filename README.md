@@ -192,6 +192,15 @@ curl -X POST http://localhost:8000/analyze \
 
 ## 우분투 배포 (Ubuntu RTX 4070 - Tier4 서버)
 
+`server.py`, `database.py`, `mqtt_client.py` 는 우분투에서 그대로 동작함.
+현재 `llama3.1:8b` 기반으로 바로 운용 가능하며, 파인튜닝은 선택사항임.
+
+| | 지금 (llama3.1:8b) | 파인튜닝 후 (sram-ai) |
+|---|---|---|
+| 서버 코드 | 동일 | 동일 |
+| 분석 정확도 | 괜찮음 | 더 좋음 |
+| 모델 설정 | `LLM_MODEL=llama3.1:8b` | `LLM_MODEL=sram-ai` |
+
 처음 세팅하는 경우 1~5를 순서대로 진행.
 이미 세팅된 경우 6번(서버 실행)만 하면 됨.
 
