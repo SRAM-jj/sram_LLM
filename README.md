@@ -80,7 +80,7 @@ echo "listener 1883\nallow_anonymous true" > /opt/homebrew/etc/mosquitto/mosquit
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install fastapi uvicorn httpx ollama paho-mqtt websockets 'uvicorn[standard]'
+pip install fastapi uvicorn httpx ollama paho-mqtt websockets 'uvicorn[standard]' psycopg2-binary
 ```
 
 ### 3. 환경변수 설정
@@ -123,32 +123,53 @@ echo "listener 1883\nallow_anonymous true" | sudo tee /etc/mosquitto/conf.d/sram
 sudo systemctl enable --now mosquitto
 ```
 
-### 2. 코드 설치
+### 2. PostgreSQL 설치 및 설정
+
+```bash
+sudo apt install postgresql postgresql-contrib -y
+sudo systemctl enable --now postgresql
+
+# DB 및 유저 생성
+sudo -u postgres psql <<EOF
+CREATE USER sram_user WITH PASSWORD '비밀번호설정';
+CREATE DATABASE sram OWNER sram_user;
+EOF
+```
+
+> 테이블은 서버 최초 실행 시 자동 생성됨 (따로 스키마 실행 불필요)
+
+### 3. 코드 설치
 
 ```bash
 git clone [GitHub 주소]
 cd sram_llm
 python3 -m venv venv
 source venv/bin/activate
-pip install fastapi uvicorn httpx ollama paho-mqtt websockets 'uvicorn[standard]'
+pip install fastapi uvicorn httpx ollama paho-mqtt websockets 'uvicorn[standard]' psycopg2-binary
 ```
 
-### 3. 환경변수 설정
+### 4. 환경변수 설정
 
 ```bash
 cp .env.example .env
-nano .env  # ip 주소
+nano .env
 ```
 
-**env파일 예시** 
+**env파일 예시**
 
 ```env
-MQTT_BROKER=192.168.x.x      # Raspberry Pi IP
+MQTT_BROKER=192.168.x.x               # Raspberry Pi IP
 DASHBOARD_URL=http://192.168.x.x:8001  # Tier3 Ubuntu IP
 LLM_MODEL=llama3.1:8b
+
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=sram
+DB_USER=sram_user
+DB_PASSWORD=비밀번호설정
 ```
 
-### 4. 서버 실행
+### 5. 서버 실행
 
 ```bash
 # 터미널 1
