@@ -392,12 +392,26 @@ RTX 4070 Ubuntu 서버에서 실제 데이터로 파인튜닝할 계획.
 - `training_data/valid.jsonl` — 740개 샘플
 - 데이터 출처: UCI Robot Failures + AI4I 2020 + NIST UR5
 
-**파인튜닝 방법 (Mac M-series):**
+**파인튜닝 방법 (Ubuntu RTX 4070):**
+
 ```bash
-bash finetune.sh
+# 의존성 설치
+pip install transformers datasets peft trl torch accelerate bitsandbytes
+
+# 파인튜닝 실행
+python3 finetune_ubuntu.py
 ```
 
-**파인튜닝 완료 후 모델 교체:**
+> `finetune_ubuntu.py` 는 추후 작성 예정
+
+**파인튜닝 완료 후 Ollama에 모델 등록:**
+
+```bash
+# GGUF 변환 후 Ollama에 등록
+ollama create sram-ai -f Modelfile
+```
+
+**모델 교체:**
 ```env
 # .env
 LLM_MODEL=sram-ai   # 파인튜닝된 커스텀 모델
