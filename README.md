@@ -85,7 +85,7 @@ sram_llm/
   결과 반환 + DB 저장 + 필요 시 긴급정지
 ```
 
-### 규칙 기반 보정이 필요한 이유
+### 규칙 기반 보정 필요한 이유
 
 LLM은 확률 기반이라 같은 입력이라도 레벨을 다르게 판단할 수 있음.
 `force_x_max` 수치는 명확한 기준이 있으므로, LLM 응답과 관계없이
@@ -189,24 +189,47 @@ curl -X POST http://localhost:8000/analyze \
 
 ---
 
-## 추후 우분투 배포 (Ubuntu RTX 4070 - Tier4 서버)
+## 우분투 배포 (Ubuntu RTX 4070 - Tier4 서버)
 
-### 1. 사전 준비
+처음 세팅하는 경우 1~5를 순서대로 진행.
+이미 세팅된 경우 6번(서버 실행)만 하면 됨.
+
+### 1. 코드 받기 (최초 1회)
+
+```bash
+git clone https://github.com/SRAM-jj/sram_LLM.git
+cd sram_LLM
+```
+
+### 2. Ollama 설치 및 모델 다운로드 (최초 1회)
 
 ```bash
 # Ollama 설치
 curl -fsSL https://ollama.com/install.sh | sh
 
+# 설치 확인
+ollama --version
+
 # 모델 다운로드
 ollama pull llama3.1:8b
-
-# MQTT 브로커
-sudo apt install mosquitto -y
-echo "listener 1883\nallow_anonymous true" | sudo tee /etc/mosquitto/conf.d/sram.conf
-sudo systemctl enable --now mosquitto
 ```
 
-### 2. PostgreSQL 설치 및 설정
+### 3. MQTT 브로커 설치 (최초 1회)
+
+```bash
+sudo apt install mosquitto mosquitto-clients -y
+
+# 설정 파일 생성
+sudo bash -c 'echo -e "listener 1883\nallow_anonymous true" > /etc/mosquitto/conf.d/sram.conf'
+
+# 부팅 시 자동 시작 + 즉시 시작
+sudo systemctl enable --now mosquitto
+
+# 작동 확인
+sudo systemctl status mosquitto
+```
+
+### 4. PostgreSQL 설치 및 설정 (최초 1회)
 
 ```bash
 sudo apt install postgresql postgresql-contrib -y
@@ -217,28 +240,26 @@ sudo -u postgres psql <<EOF
 CREATE USER sram_user WITH PASSWORD '비밀번호설정';
 CREATE DATABASE sram OWNER sram_user;
 EOF
+
+# 접속 확인
+psql -h localhost -U sram_user -d sram
 ```
 
-> 테이블은 서버 최초 실행 시 자동 생성됨 (따로 스키마 실행 불필요)
+> 테이블은 서버 최초 실행 시 자동 생성됨 (따로 스키마 실행 안해도 됨)
 
-### 3. 코드 설치
+### 5. Python 환경 설정 및 환경변수 (최초 1회)
 
 ```bash
-git clone [GitHub 주소]
-cd sram_llm
 python3 -m venv venv
 source venv/bin/activate
 pip install fastapi uvicorn httpx ollama paho-mqtt websockets 'uvicorn[standard]' psycopg2-binary
-```
 
-### 4. 환경변수 설정
-
-```bash
+# 환경변수 설정
 cp .env.example .env
 nano .env
 ```
 
-**env 파일 예시**
+**env 파일 — 실제 IP로 수정**
 
 ```env
 MQTT_BROKER=192.168.x.x               # Raspberry Pi IP
@@ -252,18 +273,34 @@ DB_USER=sram_user
 DB_PASSWORD=비밀번호설정
 ```
 
-### 5. 서버 실행
+### 6. 서버 실행
 
+**터미널 1 — Ollama**
 ```bash
-# 터미널 1
 ollama serve
+```
 
-# 터미널 2
+**터미널 2 — LLM 서버**
+```bash
+cd ~/sram_LLM
 source venv/bin/activate
 uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 > `--host 0.0.0.0` 필수 — Tier3에서 이 서버로 접근하려면 모든 IP 허용해야 함
+
+### 7. 작동 확인
+
+```bash
+curl -X POST http://localhost:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"error_type": "collision", "force_x_max": 150}}'
+```
+
+DB에 저장됐는지 확인:
+```bash
+psql -h localhost -U sram_user -d sram -c "SELECT * FROM threat_logs ORDER BY timestamp DESC LIMIT 5;"
+```
 
 ---
 
@@ -319,7 +356,7 @@ print(result["action"])  # 권장 조치 출력
 ### 구현 완료
 - 서버 시작 시 `threat_logs` 테이블 자동 생성
 - `/analyze` 호출마다 위협 분석 결과 자동 저장
-- DB 연결 실패 시 서버는 정상 작동 (Mac 개발 환경에서 DB 없어도 됨)
+- DB 연결 실패 해도 서버는 정상 작동 (Mac 개발 환경에서는 DB 없어도 됨)
 
 **저장되는 데이터 (threat_logs 테이블):**
 | 컬럼 | 타입 | 설명 |
@@ -341,7 +378,7 @@ mqtt_client.py # MQTT 긴급정지 전송
 ```
 
 ### 미구현 (추후 작업)
-- 저장된 로그 조회 API (`GET /logs`) — 팀 논의 후 추가 예정
+- 저장된 로그 조회 API (`GET /logs`) — 혼자서 정하기는 좀 그래서 미구현
 
 ---
 
