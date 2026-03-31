@@ -254,6 +254,36 @@ LLM_MODEL=sram-ai   # 파인튜닝된 커스텀 모델
 
 ---
 
+## 데이터베이스 (PostgreSQL)
+
+### 구현 완료
+- 서버 시작 시 `threat_logs` 테이블 자동 생성
+- `/analyze` 호출마다 위협 분석 결과 자동 저장
+- DB 연결 실패 시 서버는 정상 작동 (Mac 개발 환경에서 DB 없어도 됨)
+
+**저장되는 데이터 (threat_logs 테이블):**
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | SERIAL | 자동 증가 PK |
+| timestamp | TIMESTAMP | 분석 시각 |
+| level | VARCHAR | WARNING / DANGER / ERROR |
+| error_type | VARCHAR | 오류 유형 (collision 등) |
+| force_x_max | FLOAT | 최대 충격력 |
+| input_data | JSONB | 센서 원본 데이터 전체 |
+| cause | TEXT | LLM이 판단한 원인 |
+| action | TEXT | LLM이 제안한 조치 |
+
+**DB 관련 파일 구조:**
+```
+server.py      # API 서버 (DB 연동은 database.py에 위임)
+database.py    # DB 연결, 테이블 생성, 저장 함수 분리
+```
+
+### 미구현 (추후 작업)
+- 저장된 로그 조회 API (`GET /logs`) — 팀 논의 후 추가 예정
+
+---
+
 ## 개발 환경
 | 개발 | MacBook Air M4 16GB |
 | 배포 | Ubuntu PC RTX 4070 (Tier4) |
