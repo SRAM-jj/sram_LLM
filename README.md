@@ -481,3 +481,29 @@ LLM_MODEL=sram-ai
 | 프레임워크 | FastAPI + Uvicorn |
 | 통신 | HTTP (Tier3 → Tier4), MQTT (긴급정지) |
 | DB | PostgreSQL (위협 로그 저장) |
+
+---
+
+## 기술 스택
+
+### 서버
+| 기술 | 용도 |
+|------|------|
+| FastAPI | REST API 서버 프레임워크 |
+| Uvicorn | ASGI 서버 (FastAPI 실행) |
+| Ollama | 로컬 LLM 실행 엔진 |
+| llama3.1:8b | 위협 분석 LLM 모델 |
+| paho-mqtt | MQTT 긴급정지 명령 전송 |
+| httpx | 대시보드 HTTP 알림 전송 |
+| psycopg2 | PostgreSQL 연결 |
+| PostgreSQL | 위협 분석 로그 저장 |
+
+### 파인튜닝
+| 기술 | 용도 |
+|------|------|
+| transformers | HuggingFace 모델 로드/저장 |
+| peft | LoRA 어댑터 적용 |
+| trl | SFTTrainer (파인튜닝 학습 루프) |
+| bitsandbytes | 4bit 양자화 (QLoRA) |
+| datasets | JSONL 학습 데이터 로드 |
+| llama.cpp | GGUF 변환 및 양자화 |
