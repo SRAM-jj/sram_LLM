@@ -48,7 +48,8 @@ sram_llm/
 ├── mqtt_client.py             # MQTT 긴급정지 명령 전송 (Raspberry Pi)
 ├── .env.example               # 환경변수 설정 예시 (배포할때 IP 채우기)
 ├── prepare_training_data.py   # 데이터셋 → 학습용 JSONL 변환 스크립트
-├── finetune.sh                # MLX 파인튜닝 실행 스크립트 (Mac M-series용)
+├── finetune_ubuntu.py         # QLoRA 파인튜닝 스크립트 (Ubuntu RTX 4070용)
+├── merge_adapter.py           # LoRA 어댑터 → 베이스 모델 병합
 ├── Modelfile                  # Ollama 커스텀 모델 등록 파일
 ├── datasheet/                 # 학습에 사용된 데이터셋 원본
 │   ├── lp1~lp5.data.txt       # UCI Robot Execution Failures (463 샘플)
@@ -392,29 +393,71 @@ RTX 4070 Ubuntu 서버에서 실제 데이터로 파인튜닝할 계획.
 - `training_data/valid.jsonl` — 740개 샘플
 - 데이터 출처: UCI Robot Failures + AI4I 2020 + NIST UR5
 
-**파인튜닝 방법 (Ubuntu RTX 4070):**
+### 파인튜닝 전체 파이프라인
+
+```
+파인튜닝 (finetune_ubuntu.py)
+        │
+        ▼
+어댑터 병합 (merge_adapter.py)
+        │
+        ▼
+GGUF 변환 (llama.cpp)
+        │
+        ▼
+양자화 Q4_K_M (llama-quantize)
+        │
+        ▼
+Ollama 등록 (ollama create sram-ai)
+```
+
+### 1. 사전 준비
 
 ```bash
+# HuggingFace 로그인 (Llama 3.1 라이선스 동의 후 토큰 발급 필요)
+pip install huggingface_hub
+huggingface-cli login
+
 # 의존성 설치
 pip install transformers datasets peft trl torch accelerate bitsandbytes
-
-# 파인튜닝 실행
-python3 finetune_ubuntu.py
 ```
 
-> `finetune_ubuntu.py` 는 추후 작성 예정
-
-**파인튜닝 완료 후 Ollama에 모델 등록:**
+### 2. 파인튜닝 실행
 
 ```bash
-# GGUF 변환 후 Ollama에 등록
-ollama create sram-ai -f Modelfile
+python3 finetune_ubuntu.py
+# 완료 시 sram_adapter/ 에 LoRA 어댑터 저장됨
 ```
 
-**모델 교체:**
-```env
-# .env
-LLM_MODEL=sram-ai   # 파인튜닝된 커스텀 모델
+### 3. 어댑터 병합
+
+```bash
+python3 merge_adapter.py
+# 완료 시 sram_model_merged/ 에 병합된 모델 저장됨
+```
+
+### 4. GGUF 변환 및 양자화
+
+```bash
+# llama.cpp 설치
+git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp && pip install -r requirements.txt
+
+# GGUF 변환
+python3 convert_hf_to_gguf.py ../sram_model_merged/ --outtype f16 --outfile ../sram_model_f16.gguf
+
+# Q4_K_M 양자화 (6GB → 약 2GB)
+llama-quantize ../sram_model_f16.gguf ../sram_model_q4.gguf Q4_K_M
+```
+
+### 5. Ollama 등록 및 모델 교체
+
+```bash
+# Ollama에 등록
+ollama create sram-ai -f Modelfile
+
+# .env 에서 모델 교체
+LLM_MODEL=sram-ai
 ```
 
 ---
