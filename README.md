@@ -1,4 +1,4 @@
-# S.RAM! — LLM 파트 
+# S.RAM! — LLM 파트
 
 로봇 암이 충돌, 장애물 감지, 이상 동작 등의 오류를 감지하면,
 센서 데이터를 이 서버로 전송.
@@ -18,33 +18,35 @@
                                         [이 서버 - FastAPI + Ollama]
                                          llama3.1:8b 모델로 분석
                                                     │
-                                      ┌─────────────┴─────────────┐
-                                      ▼                           ▼
-                              분석 결과 반환              MQTT 긴급정지 전송
-                           (JSON: 위협레벨, 원인, 조치)    (CRITICAL 시)
+                                      ┌─────────────┼─────────────┐
+                                      ▼             ▼             ▼
+                              분석 결과 반환    DB 저장       MQTT 긴급정지
+                           (JSON: 위협레벨,  (threat_logs)   (ERROR 시)
+                            원인, 조치)
 ```
 
 **이 서버의 역할 = Tier4 (최종 AI 분석 계층)**
 
 ---
 
-## 위협 레벨 기준(현재 수치는 임시값)
+## 위협 레벨 기준 (현재 수치는 임시값)
 
 | 레벨 | force_x_max 기준 | 동작 |
 |------|-----------------|------|
 | **WARNING** | < 100 | 로그 + 대시보드 알림 |
 | **DANGER** | 100 ~ 179 | 로그 + 대시보드 알림 |
-| **ERROR** | ≥ 180 | 로그 + 대시보드 알림 + MQTT 긴급정지 |
+| **ERROR** | ≥ 180 | 로그 + 대시보드 알림 + MQTT 긴급정지 + DB 저장 |
 
 ---
 
 ## 프로젝트 구조
+
 ```
 sram_llm/
 ├── server.py                  # FastAPI 메인 서버 (AI 분석 + API 엔드포인트)
 ├── database.py                # PostgreSQL 연결, 테이블 생성, 로그 저장
 ├── mqtt_client.py             # MQTT 긴급정지 명령 전송 (Raspberry Pi)
-├── .env.example               # 환경변수 설정 예시(배포할때 ip 채우기)
+├── .env.example               # 환경변수 설정 예시 (배포할때 IP 채우기)
 ├── prepare_training_data.py   # 데이터셋 → 학습용 JSONL 변환 스크립트
 ├── finetune.sh                # MLX 파인튜닝 실행 스크립트 (Mac M-series용)
 ├── Modelfile                  # Ollama 커스텀 모델 등록 파일
@@ -60,7 +62,54 @@ sram_llm/
 
 ---
 
-## 로컬 실행 (개발 환경은 MAC)
+## LLM 작동 방식
+
+### 분석 흐름
+
+```
+센서 데이터 수신 (force_x_max, torque_x_min, error_type 등)
+        │
+        ▼
+  프롬프트 생성 (Few-shot 예시 포함)
+        │
+        ▼
+  Ollama LLM 분석 (llama3.1:8b)
+        │
+        ▼
+  JSON 파싱 (threat, level, cause, action)
+        │
+        ▼
+  규칙 기반 레벨 보정 ← force_x_max 기준으로 레벨 강제 덮어쓰기
+        │
+        ▼
+  결과 반환 + DB 저장 + 필요 시 긴급정지
+```
+
+### 규칙 기반 보정이 필요한 이유
+
+LLM은 확률 기반이라 같은 입력이라도 레벨을 다르게 판단할 수 있음.
+`force_x_max` 수치는 명확한 기준이 있으므로, LLM 응답과 관계없이
+코드에서 강제로 레벨을 덮어씌워 일관성을 보장함.
+
+```python
+# server.py — 규칙 기반 레벨 보정
+if force_x_max < 100:
+    result["level"] = "WARNING"
+elif force_x_max < 180:
+    result["level"] = "DANGER"
+else:
+    result["level"] = "ERROR"
+```
+
+### 프롬프트 구조
+
+Few-shot 방식 — 예시 3개(WARNING/DANGER/ERROR)를 프롬프트에 포함해
+LLM이 원인(cause)과 조치(action)를 올바른 형식으로 반환하도록 유도.
+레벨 자체는 규칙 기반으로 보정되므로, LLM은 원인/조치 문장 생성에 집중.
+
+---
+
+## 로컬 실행 (개발 환경 MAC)
 
 ### 1. 사전 준비
 
@@ -105,6 +154,8 @@ uvicorn server:app --reload
 # 터미널 3: MQTT 브로커
 /opt/homebrew/opt/mosquitto/sbin/mosquitto -c /opt/homebrew/etc/mosquitto/mosquitto.conf
 ```
+
+> Mac에서는 PostgreSQL 없어도 서버 정상 작동 (DB 연결 실패 시 경고 로그만 출력)
 
 ---
 
@@ -157,7 +208,7 @@ cp .env.example .env
 nano .env
 ```
 
-**env파일 예시**
+**env 파일 예시**
 
 ```env
 MQTT_BROKER=192.168.x.x               # Raspberry Pi IP
@@ -208,7 +259,7 @@ curl -X POST http://[서버IP]:8000/analyze \
 }
 ```
 
-### POST /emergency_stop — 수동 긴급정지 (수동도 일단 넣었음)
+### POST /emergency_stop — 수동 긴급정지
 
 ```bash
 curl -X POST http://[서버IP]:8000/emergency_stop
@@ -229,29 +280,6 @@ result = response.json()
 print(result["level"])   # "WARNING" / "DANGER" / "ERROR"
 print(result["cause"])   # 원인 설명 출력
 print(result["action"])  # 권장 조치 출력
-```
-
----
-
-## LLM 파인튜닝 (우분투에서 추후 작업)
-
-현재는 `llama3.1:8b` 기반으로 동작.
-RTX 4070 Ubuntu 서버에서 실제 데이터로 파인튜닝할 계획.
-
-**학습 데이터는:**
-- `training_data/train.jsonl` — 6,653개 샘플
-- `training_data/valid.jsonl` — 740개 샘플
-- 데이터 출처: UCI Robot Failures + AI4I 2020 + NIST UR5
-
-**파인튜닝 방법 (Mac M-series):**
-```bash
-bash finetune.sh
-```
-
-**파인튜닝 완료 후 모델 교체:**
-```env
-# .env
-LLM_MODEL=sram-ai   # 파인튜닝된 커스텀 모델
 ```
 
 ---
@@ -287,13 +315,36 @@ mqtt_client.py # MQTT 긴급정지 전송
 
 ---
 
+## LLM 파인튜닝 (우분투에서 추후 작업)
+
+현재는 `llama3.1:8b` 기반으로 동작.
+RTX 4070 Ubuntu 서버에서 실제 데이터로 파인튜닝할 계획.
+
+**학습 데이터:**
+- `training_data/train.jsonl` — 6,653개 샘플
+- `training_data/valid.jsonl` — 740개 샘플
+- 데이터 출처: UCI Robot Failures + AI4I 2020 + NIST UR5
+
+**파인튜닝 방법 (Mac M-series):**
+```bash
+bash finetune.sh
+```
+
+**파인튜닝 완료 후 모델 교체:**
+```env
+# .env
+LLM_MODEL=sram-ai   # 파인튜닝된 커스텀 모델
+```
+
+---
+
 ## 개발 환경
+
+| 항목 | 내용 |
+|------|------|
 | 개발 | MacBook Air M4 16GB |
 | 배포 | Ubuntu PC RTX 4070 (Tier4) |
 | 모델 | Ollama llama3.1:8b |
 | 프레임워크 | FastAPI + Uvicorn |
 | 통신 | HTTP (Tier3 → Tier4), MQTT (긴급정지) |
-
----
-
-
+| DB | PostgreSQL (위협 로그 저장) |
