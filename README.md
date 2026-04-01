@@ -82,15 +82,17 @@ sram_llm/
 ├── finetune_ubuntu.py         # QLoRA 파인튜닝 스크립트 (Ubuntu RTX 4070용)
 ├── merge_adapter.py           # LoRA 어댑터 → 베이스 모델 병합
 ├── Modelfile                  # Ollama 커스텀 모델 등록 파일
+├── ai4i2020.csv               # AI4I Predictive Maintenance 데이터셋 (10,000행, 512KB)
 ├── datasheet/                 # 학습에 사용된 데이터셋 원본
 │   ├── lp1~lp5.data.txt       # UCI Robot Execution Failures (463 샘플)
-│   ├── ai4i2020.csv           # AI4I Predictive Maintenance (10,000행)
 │   ├── ur5testresult_*.csv    # NIST UR5 로봇 암 데이터 (134,933행)
-│   └── ur3_cobotops/          # UR3 CobotOps — 관절 전류/온도 + 이상 레이블 (7,409행, UCI)
-├── training_data/             # 변환된 학습 데이터 (JSONL)
-│   ├── train.jsonl            # 훈련 데이터 6,813개
-│   └── valid.jsonl            # 검증 데이터 757개
-└── adapters/                  # LoRA 파인튜닝 결과물
+│   ├── ur3_cobotops/          # UR3 CobotOps — 관절 전류/온도 + 이상 레이블 (7,409행, UCI)
+│   │   └── dataset_02052023.xlsx
+│   └── aursad.h5              # AURSAD 데이터셋 (3.2GB — GitHub 제외, 로컬 보관)
+├── training_data/             # 변환된 학습 데이터 (JSONL, GitHub 제외)
+│   ├── train.jsonl            # 훈련 데이터 7,479개
+│   └── valid.jsonl            # 검증 데이터 831개
+└── adapters/                  # LoRA 파인튜닝 결과물 (GitHub 제외)
 ```
 
 ---
