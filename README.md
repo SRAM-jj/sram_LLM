@@ -10,22 +10,24 @@
 ## 전체 시스템 구조
 
 ```
-[ESP32] ──MQTT──▶ [Raspberry Pi] ──MQTT──▶ [Ubuntu PC (Tier3)]
-                                                    │
-                                               HTTP POST
-                                                    │
-                                                    ▼
-                                        [이 서버 - FastAPI + Ollama]
-                                         llama3.1:8b 모델로 분석
-                                                    │
-                                      ┌─────────────┼─────────────┐
-                                      ▼             ▼             ▼
-                              분석 결과 반환    DB 저장       MQTT 긴급정지
-                           (JSON: 위협레벨,  (threat_logs)   (ERROR 시)
-                            원인, 조치)
+[ESP32] ──MQTT──▶ [Raspberry Pi (Tier2)]
+                          │
+                     HTTP POST
+                          │
+                          ▼
+              [이 서버 - FastAPI + Ollama (Tier4)]
+               llama3.1:8b 모델로 위협 분석
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+   HTTP POST 결과 전달  DB 저장       MQTT 긴급정지
+   [Ubuntu PC (Tier3)] (threat_logs)   (ERROR 시)
+    백엔드/대시보드
 ```
 
-**이 서버의 역할 = Tier4 (최종 AI 분석 계층)**
+**이 서버의 역할 = Tier4 (라우터-백엔드 사이 AI 분석 계층)**
+- Raspberry Pi로부터 센서 데이터를 받아 LLM으로 분석
+- 분석 결과를 Tier3 Ubuntu PC(백엔드)로 전달
 
 ---
 
@@ -344,7 +346,10 @@ curl -X POST http://[서버IP]:8000/emergency_stop
 
 ---
 
-## Tier3에서 이 서버로 데이터 보내는 방법
+## Raspberry Pi에서 이 서버로 데이터 보내는 방법
+
+Raspberry Pi(Tier2)가 ESP32로부터 받은 센서 데이터를 LLM 서버로 전송.
+LLM이 분석 후 결과를 Tier3 백엔드로 자동 전달함.
 
 ```python
 import httpx
@@ -358,6 +363,8 @@ print(result["level"])   # "WARNING" / "DANGER" / "ERROR"
 print(result["cause"])   # 원인 설명 출력
 print(result["action"])  # 권장 조치 출력
 ```
+
+> 분석 결과는 `server.py`의 `notify_dashboard()`가 자동으로 Tier3에 전달함 (`.env`의 `DASHBOARD_URL` 참고)
 
 ---
 
