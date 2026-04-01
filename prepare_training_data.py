@@ -6,6 +6,8 @@ import os
 
 DATASHEET_DIR = os.path.join(os.path.dirname(__file__), "datasheet")
 
+JOINT_NAMES = ["base", "shoulder", "elbow", "wrist", "gripper"]
+
 LP_FILES = {
     "lp1.data.txt": "Approach to Grip Failure",
     "lp2.data.txt": "Transfer Failure",
@@ -14,14 +16,61 @@ LP_FILES = {
     "lp5.data.txt": "Move Failure",
 }
 
-def get_threat_level(force_x_max):
-    val = abs(force_x_max)
-    if val < 100:
-        return "WARNING"
-    elif val < 180:
+DEVICE_IDS = ["ARM_NODE_01", "ARM_NODE_02", "ARM_NODE_03"]
+
+
+def get_threat_level(max_effort, max_temp):
+    """절대기준 JSON 기반 위협 레벨 판단 (sram_router 기준)"""
+    if max_temp > 45 or max_effort > 50:
+        return "ERROR"
+    elif max_temp > 40 or max_effort > 30:
         return "DANGER"
     else:
-        return "ERROR"
+        return "WARNING"
+
+
+def level_to_state(level):
+    return {"WARNING": "Warning", "DANGER": "Danger", "ERROR": "Error"}[level]
+
+
+def make_router_json(device_id, efforts, temperatures, level):
+    """절대기준 JSON 포맷 생성"""
+    state = level_to_state(level)
+    return {
+        "device_id": device_id,
+        "timestamp": random.randint(1700000000, 1800000000),
+        "status": {
+            "state": state,
+            "error_code": random.randint(1000, 9999) if level != "WARNING" else 0,
+            "emergency_stop": level == "ERROR"
+        },
+        "joints": {
+            "names": JOINT_NAMES,
+            "positions": [round(random.uniform(-1.57, 1.57), 2) for _ in range(5)],
+            "efforts": [round(e, 2) for e in efforts],
+            "temperatures": [round(t, 2) for t in temperatures]
+        },
+        "end_effector": {
+            "pose": {
+                "x": round(random.uniform(100, 400), 1),
+                "y": round(random.uniform(-200, 200), 1),
+                "z": round(random.uniform(50, 500), 1),
+                "roll": 0.0, "pitch": round(random.uniform(0, 1.57), 2), "yaw": 0.0
+            },
+            "gripper_active": random.choice([True, False])
+        }
+    }
+
+
+def make_sample(input_data, level, cause, action):
+    output_data = {"threat": True, "level": level, "cause": cause, "action": action}
+    return {
+        "messages": [
+            {"role": "user", "content": f"Analyze the following robot arm joint data and determine the threat level.\nInput: {json.dumps(input_data)}"},
+            {"role": "assistant", "content": json.dumps(output_data)}
+        ]
+    }
+
 
 # ── lp1~lp5 파싱 ──────────────────────────────────────────────
 def parse_lp_files():
@@ -58,60 +107,81 @@ def parse_lp_files():
             })
     return samples
 
+
 def lp_to_training(samples):
+    """
+    lp1~5: 6채널 (Fx, Fy, Fz, Tx, Ty, Tz) → 절대기준 JSON 포맷으로 변환
+    force/torque 값을 5개 관절 efforts로 분배 (shoulder에 최대값 배치)
+    온도는 레벨에 맞는 범위로 추정 (실제 온도 데이터 없음)
+    """
     data = []
     for s in samples:
         if s["label"] == "normal":
             continue
 
         readings = s["readings"]
-        force_x_values = [r[0] for r in readings]
-        torque_x_values = [r[3] for r in readings]
+        # 채널: Fx(0), Fy(1), Fz(2), Tx(3), Ty(4), Tz(5)
+        force_vals  = [abs(r[0]) for r in readings]
+        torque_vals = [abs(r[3]) for r in readings]
 
-        force_x_max = max(force_x_values)
-        force_x_min = min(force_x_values)
-        torque_x_min = min(torque_x_values)
+        max_force  = max(force_vals)
+        max_torque = max(torque_vals)
 
-        level = get_threat_level(force_x_max)
+        # force → effort 스케일 변환 (lp 단위 → Nm 근사)
+        # shoulder에 최대값, 나머지는 비례 분배
+        scale = 0.3
+        efforts = [
+            round(max_force * scale * 0.4, 2),   # base
+            round(max_force * scale, 2),           # shoulder (최대 부하)
+            round(max_torque * scale * 0.8, 2),   # elbow
+            round(max_torque * scale * 0.5, 2),   # wrist
+            round(max_force * scale * 0.2, 2),    # gripper
+        ]
+
+        max_effort = max(efforts)
+
+        # 온도 추정 (레벨별 범위)
+        if max_effort > 50:
+            temp_range = (44, 60)
+        elif max_effort > 30:
+            temp_range = (39, 45)
+        else:
+            temp_range = (28, 40)
+
+        temperatures = [round(random.uniform(*temp_range), 1) for _ in range(5)]
+        max_temp = max(temperatures)
+
+        level = get_threat_level(max_effort, max_temp)
 
         if level == "WARNING":
-            cause = f"Moderate {s['label']} during {s['failure_type']}, force within manageable range."
-            action = "Pause operation and inspect gripper mechanism."
+            cause = f"Moderate {s['label']} during {s['failure_type']}. Shoulder effort at {max_effort:.1f} Nm."
+            action = "Monitor continuously and log for trend analysis."
         elif level == "DANGER":
-            cause = f"Severe {s['label']} during {s['failure_type']}, dangerously high force detected."
-            action = "Immediate shutdown and full mechanical inspection required."
+            cause = f"High effort ({max_effort:.1f} Nm) detected during {s['failure_type']}. Risk of joint damage."
+            action = "Reduce speed and payload. Inspect joint mechanisms."
         else:
-            cause = f"Critical {s['label']} during {s['failure_type']} with extreme force, risk of permanent damage."
+            cause = f"Critical effort ({max_effort:.1f} Nm) during {s['failure_type']}. Risk of permanent damage."
             action = "EMERGENCY STOP. Disconnect power and perform full system diagnostic."
 
-        input_data = {
-            "error_type": s["label"],
-            "failure_type": s["failure_type"],
-            "force_x_max": force_x_max,
-            "force_x_min": force_x_min,
-            "torque_x_min": torque_x_min
-        }
-        output_data = {"threat": True, "level": level, "cause": cause, "action": action}
-
-        data.append({
-            "messages": [
-                {"role": "user", "content": f"Analyze the following robot sensor data and determine the threat level.\nInput: {json.dumps(input_data)}"},
-                {"role": "assistant", "content": json.dumps(output_data)}
-            ]
-        })
+        input_data = make_router_json(random.choice(DEVICE_IDS), efforts, temperatures, level)
+        data.append(make_sample(input_data, level, cause, action))
     return data
+
 
 # ── AI4I 2020 파싱 ─────────────────────────────────────────────
 def ai4i_to_training():
+    """
+    AI4I: torque_Nm → shoulder effort, process_temp_K → °C 변환 후 온도로 사용
+    """
     data = []
     filepath = os.path.join(os.path.dirname(__file__), "ai4i2020.csv")
 
     failure_map = {
-        "TWF": ("DANGER",  "Tool wear failure, tool life exceeded safe operating limit.",           "Replace tool immediately and inspect workpiece quality."),
-        "HDF": ("DANGER",  "Heat dissipation failure, process temperature critically high.",        "Stop operation, check cooling system and reduce rotational speed."),
-        "PWF": ("ERROR",   "Power failure, motor operating outside safe power envelope.",           "EMERGENCY STOP. Inspect motor and power supply immediately."),
-        "OSF": ("ERROR",   "Overstrain failure, torque exceeded tool strength limit.",              "EMERGENCY STOP. Reduce torque settings and inspect mechanical components."),
-        "RNF": ("WARNING", "Random failure detected, cause undetermined.",                         "Log the event, monitor for recurrence, and schedule maintenance."),
+        "TWF": ("DANGER",  "Tool wear failure. Joint torque exceeded safe operating limit.",          "Replace worn components and inspect joint mechanisms."),
+        "HDF": ("DANGER",  "Heat dissipation failure. Joint temperature critically high.",            "Stop operation, check cooling system and reduce speed."),
+        "PWF": ("ERROR",   "Power failure. Motor operating outside safe torque envelope.",            "EMERGENCY STOP. Inspect motor and power supply immediately."),
+        "OSF": ("ERROR",   "Overstrain failure. Joint torque exceeded structural limit.",             "EMERGENCY STOP. Reduce torque settings and inspect mechanical components."),
+        "RNF": ("WARNING", "Random anomaly detected. Cause undetermined.",                           "Log the event, monitor for recurrence, and schedule maintenance."),
     }
 
     with open(filepath, 'r', encoding='utf-8-sig') as f:
@@ -122,26 +192,44 @@ def ai4i_to_training():
                 continue
 
             level, cause, action = failure_map[active]
-            input_data = {
-                "error_type": active,
-                "air_temp_K": float(row["Air temperature [K]"]),
-                "process_temp_K": float(row["Process temperature [K]"]),
-                "rotational_speed_rpm": int(row["Rotational speed [rpm]"]),
-                "torque_Nm": float(row["Torque [Nm]"]),
-                "tool_wear_min": int(row["Tool wear [min]"])
-            }
-            output_data = {"threat": True, "level": level, "cause": cause, "action": action}
 
-            data.append({
-                "messages": [
-                    {"role": "user", "content": f"Analyze the following robot sensor data and determine the threat level.\nInput: {json.dumps(input_data)}"},
-                    {"role": "assistant", "content": json.dumps(output_data)}
-                ]
-            })
+            torque_nm   = float(row["Torque [Nm]"])
+            process_temp_c = float(row["Process temperature [K]"]) - 273.15
+
+            # torque → 5개 관절 efforts 분배 (shoulder 최대)
+            efforts = [
+                round(torque_nm * 0.4, 2),
+                round(torque_nm, 2),         # shoulder 최대
+                round(torque_nm * 0.7, 2),
+                round(torque_nm * 0.4, 2),
+                round(torque_nm * 0.1, 2),
+            ]
+
+            # process_temp → 관절 온도 분배 (shoulder 가장 높음)
+            temperatures = [
+                round(process_temp_c * 0.85, 1),
+                round(process_temp_c, 1),    # shoulder 최대
+                round(process_temp_c * 0.9, 1),
+                round(process_temp_c * 0.8, 1),
+                round(process_temp_c * 0.75, 1),
+            ]
+
+            # 레벨 재검증 (규칙 기반 보정)
+            max_effort = max(efforts)
+            max_temp   = max(temperatures)
+            level = get_threat_level(max_effort, max_temp)
+
+            input_data = make_router_json(random.choice(DEVICE_IDS), efforts, temperatures, level)
+            data.append(make_sample(input_data, level, cause, action))
     return data
+
 
 # ── UR5 파싱 (5% 샘플링) ──────────────────────────────────────
 def ur5_to_training(sample_rate=0.05):
+    """
+    UR5: actual_moment(6관절 토크) → efforts, joint_temps → temperatures
+    절대기준 JSON과 가장 자연스럽게 매핑되는 데이터
+    """
     data = []
     ur5_files = [f for f in os.listdir(DATASHEET_DIR) if f.startswith("ur5testresult") and f.endswith(".csv")]
 
@@ -159,52 +247,37 @@ def ur5_to_training(sample_rate=0.05):
                     if len(row) < 13:
                         continue
 
-                    actual_moment = row[10]
-                    joint_temps   = row[12]
-                    actual_q      = row[2]
-                    target_q      = row[1]
+                    actual_moment = row[10]   # 6관절 토크 [Nm]
+                    joint_temps   = row[12]   # 6관절 온도 [°C]
 
-                    max_torque = max(abs(t) for t in actual_moment)
-                    max_temp   = max(joint_temps)
-                    avg_temp   = sum(joint_temps) / len(joint_temps)
-                    pos_error  = max(abs(a - t) for a, t in zip(actual_q, target_q))
+                    # UR5는 6관절 → 첫 5개 사용 (JOINT_NAMES에 맞춤)
+                    efforts      = [round(abs(t), 2) for t in actual_moment[:5]]
+                    temperatures = [round(t, 2) for t in joint_temps[:5]]
 
-                    if max_temp > 45 or max_torque > 50:
-                        level  = "ERROR"
-                        cause  = f"Critical joint temperature ({max_temp:.1f}°C) or torque ({max_torque:.1f}Nm) exceeded safe limits."
+                    max_effort = max(efforts)
+                    max_temp   = max(temperatures)
+                    level      = get_threat_level(max_effort, max_temp)
+
+                    if level == "ERROR":
+                        cause  = f"Critical joint torque ({max_effort:.1f} Nm) or temperature ({max_temp:.1f}°C) exceeded safe limits during {condition}."
                         action = "EMERGENCY STOP. Cool down joints and inspect mechanical components."
-                    elif max_temp > 40 or max_torque > 30:
-                        level  = "DANGER"
-                        cause  = f"High joint temperature ({max_temp:.1f}°C) or torque ({max_torque:.1f}Nm) approaching critical limits."
+                    elif level == "DANGER":
+                        cause  = f"High joint torque ({max_effort:.1f} Nm) or temperature ({max_temp:.1f}°C) approaching critical limits during {condition}."
                         action = "Reduce speed and payload. Monitor temperature continuously."
                     else:
-                        level  = "WARNING"
-                        cause  = f"Elevated joint torque ({max_torque:.1f}Nm) detected during {condition} operation."
+                        cause  = f"Elevated joint torque ({max_effort:.1f} Nm) detected during {condition} operation."
                         action = "Monitor system and log for trend analysis."
 
-                    input_data = {
-                        "error_type": "joint_anomaly",
-                        "condition": condition,
-                        "max_joint_torque_Nm": round(max_torque, 2),
-                        "max_joint_temp_C":    round(max_temp, 2),
-                        "avg_joint_temp_C":    round(avg_temp, 2),
-                        "max_position_error_deg": round(pos_error, 4)
-                    }
-                    output_data = {"threat": True, "level": level, "cause": cause, "action": action}
-
-                    data.append({
-                        "messages": [
-                            {"role": "user", "content": f"Analyze the following robot sensor data and determine the threat level.\nInput: {json.dumps(input_data)}"},
-                            {"role": "assistant", "content": json.dumps(output_data)}
-                        ]
-                    })
+                    input_data = make_router_json(random.choice(DEVICE_IDS), efforts, temperatures, level)
+                    data.append(make_sample(input_data, level, cause, action))
                 except Exception:
                     continue
     return data
 
+
 # ── 메인 ──────────────────────────────────────────────────────
 def main():
-    print("데이터 변환 시작...\n")
+    print("데이터 변환 시작 (절대기준 JSON 포맷)...\n")
 
     lp_data   = lp_to_training(parse_lp_files())
     ai4i_data = ai4i_to_training()
@@ -236,6 +309,7 @@ def main():
     print(f"총 {len(all_data)}개 샘플")
     print(f"훈련: {len(train_data)}개 → training_data/train.jsonl")
     print(f"검증: {len(valid_data)}개 → training_data/valid.jsonl")
+
 
 if __name__ == "__main__":
     main()
