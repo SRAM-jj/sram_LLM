@@ -88,7 +88,9 @@ sram_llm/
 │   ├── ur5testresult_*.csv    # NIST UR5 로봇 암 데이터 (134,933행)
 │   ├── ur3_cobotops/          # UR3 CobotOps — 관절 전류/온도 + 이상 레이블 (7,409행, UCI)
 │   │   └── dataset_02052023.xlsx
-│   └── aursad.h5              # AURSAD 데이터셋 (3.2GB — GitHub 제외, 로컬 보관)
+│   └── aursad.h5              # AURSAD 데이터셋 (3.2GB — GitHub 제외)
+│                              # 다운로드: https://archive.ics.uci.edu/dataset/631/aursad
+│                              # 받은 후 datasheet/ 폴더에 넣으면 됨
 ├── training_data/             # 변환된 학습 데이터 (JSONL, GitHub 제외)
 │   ├── train.jsonl            # 훈련 데이터 7,479개
 │   └── valid.jsonl            # 검증 데이터 831개
