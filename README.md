@@ -10,34 +10,42 @@
 ## 전체 시스템 구조
 
 ```
-[ESP32] ──MQTT──▶ [Raspberry Pi (Tier2)]
+[ESP32] ──UDP──▶ [Raspberry Pi (Tier2, 라우터)]
+                  filter_node (ROS 2)
+                  상태 분류: Safe / Warning / Danger / Error
                           │
-                     HTTP POST
-                          │
-                          ▼
-              [이 서버 - FastAPI + Ollama (Tier4)]
-               llama3.1:8b 모델로 위협 분석
-                          │
-          ┌───────────────┼───────────────┐
-          ▼               ▼               ▼
-   HTTP POST 결과 전달  DB 저장       MQTT 긴급정지
-   [Ubuntu PC (Tier3)] (threat_logs)   (ERROR 시)
-    백엔드/대시보드
+                    ROS 2 토픽
+              ┌───────────┴───────────┐
+        /safe_bulk_data        /alert_danger
+        (10초 배치, 생략)       /alert_error (즉시)
+                                      │
+                                      ▼
+                        [이 서버 - FastAPI + Ollama]
+                         ros2_node.py (llm_analyzer_node)
+                         llama3.1:8b 모델로 위협 분석
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    ▼                 ▼                  ▼
+             HTTP POST 결과 전달   DB 저장          MQTT 긴급정지
+             [Ubuntu PC (Tier3)]  (threat_logs)     (ERROR 시)
+              백엔드/대시보드
 ```
 
-**이 서버의 역할 = Tier4 (라우터-백엔드 사이 AI 분석 계층)**
-- Raspberry Pi로부터 센서 데이터를 받아 LLM으로 분석
-- 분석 결과를 Tier3 Ubuntu PC(백엔드)로 전달
+**이 서버의 역할 = 라우터(RPi)와 백엔드(Tier3) 사이 AI 분석 계층**
+- Raspberry Pi `filter_node`가 분류한 이상 데이터를 ROS 2 토픽으로 수신
+- LLM으로 원인/조치 분석 후 Tier3 백엔드로 결과 전달
 
 ---
 
 ## 위협 레벨 기준 (현재 수치는 임시값)
 
-| 레벨 | force_x_max 기준 | 동작 |
-|------|-----------------|------|
-| **WARNING** | < 100 | 로그 + 대시보드 알림 |
-| **DANGER** | 100 ~ 179 | 로그 + 대시보드 알림 |
-| **ERROR** | ≥ 180 | 로그 + 대시보드 알림 + MQTT 긴급정지 + DB 저장 |
+`joints.efforts`(토크)와 `joints.temperatures`(온도) 기준으로 판단.
+
+| 레벨 | 조건 | 동작 |
+|------|------|------|
+| **WARNING** | max effort ≤ 30 Nm AND max temp ≤ 40°C | 로그 + 대시보드 알림 |
+| **DANGER** | max effort > 30 Nm OR max temp > 40°C | 로그 + 대시보드 알림 |
+| **ERROR** | max effort > 50 Nm OR max temp > 45°C | 로그 + 대시보드 알림 + MQTT 긴급정지 + DB 저장 |
 
 ---
 
@@ -46,6 +54,7 @@
 ```
 sram_llm/
 ├── server.py                  # FastAPI 메인 서버 (AI 분석 + API 엔드포인트)
+├── ros2_node.py               # ROS 2 구독 노드 (llm_analyzer_node) — RPi 데이터 수신
 ├── database.py                # PostgreSQL 연결, 테이블 생성, 로그 저장
 ├── mqtt_client.py             # MQTT 긴급정지 명령 전송 (Raspberry Pi)
 ├── .env.example               # 환경변수 설정 예시 (배포할때 IP 채우기)
@@ -299,7 +308,17 @@ source venv/bin/activate
 uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
+**터미널 3 — ROS 2 노드 (llm_analyzer_node)**
+```bash
+export ROS_DOMAIN_ID=30
+source /opt/ros/humble/setup.bash
+cd ~/sram_LLM
+source venv/bin/activate
+python3 ros2_node.py
+```
+
 > `--host 0.0.0.0` 필수 — Tier3에서 이 서버로 접근하려면 모든 IP 허용해야 함
+> `ROS_DOMAIN_ID=30` — sram_router와 동일한 도메인 ID 사용
 
 ### 7. 작동 확인
 
@@ -346,25 +365,73 @@ curl -X POST http://[서버IP]:8000/emergency_stop
 
 ---
 
-## Raspberry Pi에서 이 서버로 데이터 보내는 방법
+## 절대기준 JSON (sram_router 기준)
 
-Raspberry Pi(Tier2)가 ESP32로부터 받은 센서 데이터를 LLM 서버로 전송.
-LLM이 분석 후 결과를 Tier3 백엔드로 자동 전달함.
+Raspberry Pi `filter_node`가 이 포맷으로 데이터를 전송함.
+모든 분석은 이 포맷을 기준으로 동작함.
+
+```json
+{
+  "device_id": "ARM_NODE_01",
+  "timestamp": 123456789,
+  "status": {
+    "state": "ERROR",
+    "error_code": 4021,
+    "emergency_stop": true
+  },
+  "joints": {
+    "names": ["base", "shoulder", "elbow", "wrist", "gripper"],
+    "positions": [1.57, -0.52, 1.20, 0.0, 0.5],
+    "efforts": [12.5, 210.5, 30.1, 5.0, 1.2],
+    "temperatures": [35.2, 88.3, 38.0, 32.1, 30.0]
+  },
+  "end_effector": {
+    "pose": {"x": 250.5, "y": 100.2, "z": 300.0, "roll": 0.0, "pitch": 1.57, "yaw": 0.0},
+    "gripper_active": true
+  }
+}
+```
+
+---
+
+## Raspberry Pi — LLM 서버 연동 방법
+
+### ROS 2 방식 (정식 연동)
+
+Raspberry Pi `filter_node`가 ROS 2 토픽으로 전송 → `ros2_node.py`가 수신 후 LLM 분석.
+
+**Ubuntu에서 실행:**
+```bash
+export ROS_DOMAIN_ID=30
+source /opt/ros/humble/setup.bash
+python3 ros2_node.py
+```
+
+**구독 토픽:**
+| 토픽 | 상태 | 처리 |
+|------|------|------|
+| `/alert_error` | ERROR | LLM 분석 + 긴급정지 |
+| `/alert_danger` | DANGER | LLM 분석 |
+| `/safe_bulk_data` | SAFE | 로그만 (분석 생략) |
+
+### HTTP 방식 (테스트용)
+
+ROS 2 없이 직접 테스트할 때 사용.
 
 ```python
 import httpx
 
 response = httpx.post(
     "http://[Tier4_IP]:8000/analyze",
-    json={"data": 오류데이터_딕셔너리}
+    json={"data": 절대기준_JSON_딕셔너리}
 )
 result = response.json()
 print(result["level"])   # "WARNING" / "DANGER" / "ERROR"
-print(result["cause"])   # 원인 설명 출력
-print(result["action"])  # 권장 조치 출력
+print(result["cause"])   # 원인 설명
+print(result["action"])  # 권장 조치
 ```
 
-> 분석 결과는 `server.py`의 `notify_dashboard()`가 자동으로 Tier3에 전달함 (`.env`의 `DASHBOARD_URL` 참고)
+> 분석 결과는 `notify_dashboard()`가 자동으로 Tier3에 전달함 (`.env`의 `DASHBOARD_URL` 참고)
 
 ---
 
@@ -380,10 +447,12 @@ print(result["action"])  # 권장 조치 출력
 |------|------|------|
 | id | SERIAL | 자동 증가 PK |
 | timestamp | TIMESTAMP | 분석 시각 |
+| device_id | VARCHAR | 로봇 노드 ID (ARM_NODE_01 등) |
 | level | VARCHAR | WARNING / DANGER / ERROR |
-| error_type | VARCHAR | 오류 유형 (collision 등) |
-| force_x_max | FLOAT | 최대 충격력 |
-| input_data | JSONB | 센서 원본 데이터 전체 |
+| state | VARCHAR | 라우터 사전 분류 (Safe/Warning/Danger/Error) |
+| max_effort | FLOAT | 최대 관절 토크 [Nm] |
+| max_temp | FLOAT | 최대 관절 온도 [°C] |
+| input_data | JSONB | 센서 원본 데이터 전체 (절대기준 JSON) |
 | cause | TEXT | LLM이 판단한 원인 |
 | action | TEXT | LLM이 제안한 조치 |
 

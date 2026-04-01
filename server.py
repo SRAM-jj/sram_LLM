@@ -23,30 +23,52 @@ async def startup():
     init_db()
 
 # ── 프롬프트 ──────────────────────────────────────────────────
+# 절대기준 JSON 포맷 (sram_router 기준):
+# {
+#   "device_id": "ARM_NODE_01",
+#   "timestamp": 123456789,
+#   "status": {"state": "ERROR", "error_code": 4021, "emergency_stop": true},
+#   "joints": {
+#     "names": ["base", "shoulder", "elbow", "wrist", "gripper"],
+#     "positions": [1.57, -0.52, 1.20, 0.0, 0.5],
+#     "efforts": [12.5, 210.5, 30.1, 5.0, 1.2],
+#     "temperatures": [35.2, 88.3, 38.0, 32.1, 30.0]
+#   },
+#   "end_effector": {
+#     "pose": {"x": 250.5, "y": 100.2, "z": 300.0, "roll": 0.0, "pitch": 1.57, "yaw": 0.0},
+#     "gripper_active": true
+#   }
+# }
+
 class ErrorData(BaseModel):
     data: dict
 
 def build_prompt(data: dict) -> str:
     return f"""
 You are a security AI for a robotic monitoring system (S.RAM!).
-Analyze the following error data and respond ONLY in JSON format.
+Analyze the following robot arm joint data and respond ONLY in JSON format.
 
-IMPORTANT: The ONLY valid level values are "WARNING", "DANGER", and "ERROR". Never use "CRITICAL" or any other value.
+IMPORTANT: The ONLY valid level values are "WARNING", "DANGER", and "ERROR".
+
+Input fields:
+- joints.efforts: torque values per joint [Nm]
+- joints.temperatures: temperature per joint [°C]
+- status.state: pre-classified state from router (Safe/Warning/Danger/Error)
 
 Threat level rules (ABSOLUTE - must follow exactly):
-- force_x_max < 100  → level = "WARNING"
-- force_x_max 100~179 → level = "DANGER"
-- force_x_max >= 180  → level = "ERROR"
+- max effort > 50 Nm  OR  max temperature > 45°C  → level = "ERROR"
+- max effort > 30 Nm  OR  max temperature > 40°C  → level = "DANGER"
+- otherwise                                        → level = "WARNING"
 
 Examples:
-Input: {{"error_type": "collision", "failure_type": "Transfer Failure", "force_x_max": 60, "torque_x_min": -50}}
-Output: {{"threat": true, "level": "WARNING", "cause": "Moderate collision during transfer, force exceeds normal range.", "action": "Pause operation and inspect gripper mechanism."}}
+Input: {{"device_id": "ARM_NODE_01", "status": {{"state": "WARNING"}}, "joints": {{"names": ["base", "shoulder", "elbow", "wrist", "gripper"], "efforts": [12.5, 25.0, 10.0, 5.0, 1.2], "temperatures": [35.0, 38.0, 34.0, 32.0, 30.0]}}}}
+Output: {{"threat": true, "level": "WARNING", "cause": "Moderate joint torque detected. shoulder joint showing elevated effort.", "action": "Monitor continuously and log for trend analysis."}}
 
-Input: {{"error_type": "collision", "failure_type": "Approach to Grip Failure", "force_x_max": 140, "torque_x_min": -130}}
-Output: {{"threat": true, "level": "DANGER", "cause": "Severe collision detected, dangerously high force and torque.", "action": "Immediate shutdown and full mechanical inspection required."}}
+Input: {{"device_id": "ARM_NODE_01", "status": {{"state": "DANGER"}}, "joints": {{"names": ["base", "shoulder", "elbow", "wrist", "gripper"], "efforts": [35.0, 40.0, 20.0, 8.0, 2.0], "temperatures": [39.0, 43.0, 37.0, 33.0, 31.0]}}}}
+Output: {{"threat": true, "level": "DANGER", "cause": "High joint torque and temperature approaching critical limits on shoulder joint.", "action": "Reduce speed and payload. Monitor temperature continuously."}}
 
-Input: {{"error_type": "obstruction", "failure_type": "Move Failure", "force_x_max": 250, "torque_x_min": -220}}
-Output: {{"threat": true, "level": "ERROR", "cause": "Critical obstruction with extreme force, risk of permanent damage.", "action": "EMERGENCY STOP. Disconnect power and perform full system diagnostic."}}
+Input: {{"device_id": "ARM_NODE_01", "status": {{"state": "ERROR"}}, "joints": {{"names": ["base", "shoulder", "elbow", "wrist", "gripper"], "efforts": [12.5, 210.5, 30.1, 5.0, 1.2], "temperatures": [35.2, 88.3, 38.0, 32.1, 30.0]}}}}
+Output: {{"threat": true, "level": "ERROR", "cause": "Critical torque (210.5 Nm) and temperature (88.3°C) on shoulder joint far exceed safe limits.", "action": "EMERGENCY STOP. Cool down joints and inspect mechanical components immediately."}}
 
 Now analyze this:
 Input: {json.dumps(data)}
@@ -103,15 +125,19 @@ async def analyze(error: ErrorData):
 
         result["input"] = error.data
 
-        # 규칙 기반 레벨 보정
-        force_x_max = error.data.get("force_x_max")
-        if force_x_max is not None:
-            if force_x_max < 100:
-                result["level"] = "WARNING"
-            elif force_x_max < 180:
-                result["level"] = "DANGER"
-            else:
-                result["level"] = "ERROR"
+        # 규칙 기반 레벨 보정 (joints 데이터 기준)
+        joints = error.data.get("joints", {})
+        efforts = joints.get("efforts", [])
+        temperatures = joints.get("temperatures", [])
+        max_effort = max(efforts) if efforts else 0
+        max_temp = max(temperatures) if temperatures else 0
+
+        if max_temp > 45 or max_effort > 50:
+            result["level"] = "ERROR"
+        elif max_temp > 40 or max_effort > 30:
+            result["level"] = "DANGER"
+        else:
+            result["level"] = "WARNING"
 
         level = result.get("level", "UNKNOWN")
         handle_threat_level(level, result)
