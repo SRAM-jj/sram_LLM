@@ -55,7 +55,7 @@
 sram_llm/
 ├── server.py                  # FastAPI 메인 서버 (AI 분석 + API 엔드포인트)
 ├── ros2_node.py               # ROS 2 구독 노드 (llm_analyzer_node) — RPi 데이터 수신
-├── database.py                # PostgreSQL 연결, 테이블 생성, 로그 저장
+├── database.py                # InfluxDB 연결, 위협 로그 저장
 ├── mqtt_client.py             # MQTT 긴급정지 명령 전송 (Raspberry Pi)
 ├── .env.example               # 환경변수 설정 예시 (배포할때 IP 채우기)
 ├── prepare_training_data.py   # 데이터셋 → 학습용 JSONL 변환 스크립트
@@ -159,7 +159,7 @@ echo "listener 1883\nallow_anonymous true" > /opt/homebrew/etc/mosquitto/mosquit
 cd ~/Desktop/sram_llm
 python3 -m venv venv_new
 source venv_new/bin/activate
-pip install fastapi uvicorn httpx ollama paho-mqtt websockets 'uvicorn[standard]' psycopg2-binary
+pip install fastapi uvicorn httpx ollama paho-mqtt websockets 'uvicorn[standard]' influxdb-client
 ```
 
 ### 3. 환경변수 설정 (최초 1회)
@@ -195,7 +195,7 @@ uvicorn server:app --reload --reload-exclude 'venv*'
 ```bash
 curl -X POST http://localhost:8000/analyze \
   -H "Content-Type: application/json" \
-  -d '{"data": {"error_type": "collision", "force_x_max": 150}}'
+  -d '{"data": {"device_id": "ARM_NODE_01", "status": {"state": "DANGER"}, "joints": {"efforts": [12.5, 35.0, 30.1], "temperatures": [35.2, 42.0, 38.0]}}}'
 ```
 
 **정상 응답 예시:**
@@ -203,13 +203,13 @@ curl -X POST http://localhost:8000/analyze \
 {
   "threat": true,
   "level": "DANGER",
-  "cause": "Severe collision detected, dangerously high force.",
-  "action": "Immediate shutdown and full mechanical inspection required.",
-  "input": {"error_type": "collision", "force_x_max": 150}
+  "cause": "Joint temperature exceeds threshold, potential overheating.",
+  "action": "Reduce load and monitor joint temperatures.",
+  "input": {"device_id": "ARM_NODE_01", "status": {"state": "DANGER"}, "joints": {"efforts": [12.5, 35.0, 30.1], "temperatures": [35.2, 42.0, 38.0]}}
 }
 ```
 
-> Mac에서는 PostgreSQL 없어도 서버 정상 작동 (DB 연결 실패 시 경고 로그만 출력)
+> Mac에서는 InfluxDB 없어도 서버 정상 작동 (DB 연결 실패 시 경고 로그만 출력)
 
 ---
 
@@ -262,48 +262,49 @@ sudo systemctl enable --now mosquitto
 sudo systemctl status mosquitto
 ```
 
-### 4. PostgreSQL 설치 및 설정 (최초 1회)
+### 4. InfluxDB 설치 및 설정 (최초 1회)
 
 ```bash
-sudo apt install postgresql postgresql-contrib -y
-sudo systemctl enable --now postgresql
+# InfluxDB 설치
+curl -s https://repos.influxdata.com/influxdata-archive.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/influxdata-archive.gpg
+echo 'deb [signed-by=/etc/apt/trusted.gpg.d/influxdata-archive.gpg] https://repos.influxdata.com/ubuntu stable main' | sudo tee /etc/apt/sources.list.d/influxdata.list
+sudo apt update && sudo apt install influxdb2 -y
+sudo systemctl enable --now influxdb
 
-# DB 및 유저 생성
-sudo -u postgres psql <<EOF
-CREATE USER sram_user WITH PASSWORD '비밀번호설정';
-CREATE DATABASE sram OWNER sram_user;
-EOF
-
-# 접속 확인
-psql -h localhost -U sram_user -d sram
+# 작동 확인
+sudo systemctl status influxdb
 ```
 
-> 테이블은 서버 최초 실행 시 자동 생성됨 (따로 스키마 실행 안해도 됨)
+**초기 설정 (브라우저에서 진행):**
+1. `http://localhost:8086` 접속
+2. Organization: `sram`, Bucket: `threat_logs` 생성
+3. API Token 발급 → `.env`의 `INFLUX_TOKEN`에 입력
+
+> 버킷은 UI에서 미리 생성 필요. 서버 실행 시 연결 확인만 자동으로 수행됨.
 
 ### 5. Python 환경 설정 및 환경변수 (최초 1회)
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install fastapi uvicorn httpx ollama paho-mqtt websockets 'uvicorn[standard]' psycopg2-binary
+pip install fastapi uvicorn httpx ollama paho-mqtt websockets 'uvicorn[standard]' influxdb-client
 
 # 환경변수 설정
 cp .env.example .env
 nano .env
 ```
 
-**env 파일 — 실제 IP로 수정**
+**env 파일 — 실제 값으로 수정**
 
 ```env
 MQTT_BROKER=192.168.x.x               # Raspberry Pi IP
 DASHBOARD_URL=http://192.168.x.x:8001  # Tier3 Ubuntu IP
 LLM_MODEL=llama3.1:8b
 
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=sram
-DB_USER=sram_user
-DB_PASSWORD=비밀번호설정
+INFLUX_URL=http://localhost:8086
+INFLUX_TOKEN=발급받은_토큰_입력
+INFLUX_ORG=sram
+INFLUX_BUCKET=threat_logs
 ```
 
 ### 6. 서버 실행
@@ -337,12 +338,14 @@ python3 ros2_node.py
 ```bash
 curl -X POST http://localhost:8000/analyze \
   -H "Content-Type: application/json" \
-  -d '{"data": {"error_type": "collision", "force_x_max": 150}}'
+  -d '{"data": {"device_id": "ARM_NODE_01", "status": {"state": "ERROR"}, "joints": {"efforts": [12.5, 55.0, 30.1], "temperatures": [35.2, 46.0, 38.0]}}}'
 ```
 
-DB에 저장됐는지 확인:
+InfluxDB에 저장됐는지 확인:
 ```bash
-psql -h localhost -U sram_user -d sram -c "SELECT * FROM threat_logs ORDER BY timestamp DESC LIMIT 5;"
+# 브라우저에서 http://localhost:8086 → Data Explorer → threat_logs 버킷 조회
+# 또는 CLI로 확인
+influx query 'from(bucket:"threat_logs") |> range(start: -1h) |> limit(n:5)'
 ```
 
 ---
@@ -355,7 +358,7 @@ psql -h localhost -U sram_user -d sram -c "SELECT * FROM threat_logs ORDER BY ti
 ```bash
 curl -X POST http://[서버IP]:8000/analyze \
   -H "Content-Type: application/json" \
-  -d '{"data": {"error_type": "collision", "force_x_max": 185}}'
+  -d '{"data": {"device_id": "ARM_NODE_01", "status": {"state": "ERROR"}, "joints": {"efforts": [12.5, 55.0, 30.1], "temperatures": [35.2, 46.0, 38.0]}}}'
 ```
 
 **응답:**
@@ -363,9 +366,9 @@ curl -X POST http://[서버IP]:8000/analyze \
 {
   "threat": true,
   "level": "ERROR",
-  "cause": "Severe collision detected with extreme force.",
-  "action": "EMERGENCY STOP. Disconnect power and perform full system diagnostic.",
-  "input": {"error_type": "collision", "force_x_max": 185}
+  "cause": "Joint torque and temperature critically exceeded safe limits.",
+  "action": "EMERGENCY STOP. Inspect joints immediately and cool down system.",
+  "input": {"device_id": "ARM_NODE_01", "status": {"state": "ERROR"}, "joints": {"efforts": [12.5, 55.0, 30.1], "temperatures": [35.2, 46.0, 38.0]}}
 }
 ```
 
@@ -447,36 +450,40 @@ print(result["action"])  # 권장 조치
 
 ---
 
-## 데이터베이스 (PostgreSQL)
+## 데이터베이스 (InfluxDB)
+
+시계열 센서 데이터에 특화된 InfluxDB 사용.
+PostgreSQL 대비 센서 데이터 저장/조회 속도가 빠르고 압축률이 높음.
 
 ### 구현 완료
-- 서버 시작 시 `threat_logs` 테이블 자동 생성
+- 서버 시작 시 InfluxDB 연결 확인
 - `/analyze` 호출마다 위협 분석 결과 자동 저장
-- DB 연결 실패 해도 서버는 정상 작동 (Mac 개발 환경에서는 DB 없어도 됨)
+- DB 연결 실패해도 서버는 정상 작동 (Mac 개발 환경에서는 DB 없어도 됨)
 
-**저장되는 데이터 (threat_logs 테이블):**
-| 컬럼 | 타입 | 설명 |
+**저장되는 데이터 (threat_logs 버킷):**
+| 구분 | 필드 | 설명 |
 |------|------|------|
-| id | SERIAL | 자동 증가 PK |
-| timestamp | TIMESTAMP | 분석 시각 |
-| device_id | VARCHAR | 로봇 노드 ID (ARM_NODE_01 등) |
-| level | VARCHAR | WARNING / DANGER / ERROR |
-| state | VARCHAR | 라우터 사전 분류 (Safe/Warning/Danger/Error) |
-| max_effort | FLOAT | 최대 관절 토크 [Nm] |
-| max_temp | FLOAT | 최대 관절 온도 [°C] |
-| input_data | JSONB | 센서 원본 데이터 전체 (절대기준 JSON) |
-| cause | TEXT | LLM이 판단한 원인 |
-| action | TEXT | LLM이 제안한 조치 |
+| Tag | device_id | 로봇 노드 ID (ARM_NODE_01 등) |
+| Tag | level | WARNING / DANGER / ERROR |
+| Tag | state | 라우터 사전 분류 (Safe/Warning/Danger/Error) |
+| Field | max_effort | 최대 관절 토크 [Nm] |
+| Field | max_temp | 최대 관절 온도 [°C] |
+| Field | cause | LLM이 판단한 원인 |
+| Field | action | LLM이 제안한 조치 |
+| Field | input_data | 센서 원본 데이터 전체 (JSON) |
+| 자동 | timestamp | 저장 시각 (UTC) |
+
+> Tag는 인덱싱되어 필터링/그룹화에 최적화, Field는 실제 측정값
 
 **파일 역할 분리:**
 ```
 server.py      # API 엔드포인트 + LLM 분석 흐름
-database.py    # DB 연결, 테이블 생성, 저장
+database.py    # InfluxDB 연결, 저장
 mqtt_client.py # MQTT 긴급정지 전송
 ```
 
 ### 미구현 (추후 작업)
-- 저장된 로그 조회 API (`GET /logs`) — 혼자서 정하기는 좀 그래서 미구현
+- 저장된 로그 조회 API (`GET /logs`) — 팀 논의 후 추가 예정
 
 ---
 
@@ -576,7 +583,7 @@ LLM_MODEL=sram-ai
 | 모델 | Ollama llama3.1:8b |
 | 프레임워크 | FastAPI + Uvicorn |
 | 통신 | HTTP (Tier3 → Tier4), MQTT (긴급정지) |
-| DB | PostgreSQL (위협 로그 저장) |
+| DB | InfluxDB (위협 로그 저장) |
 
 ---
 
@@ -591,8 +598,8 @@ LLM_MODEL=sram-ai
 | llama3.1:8b | 위협 분석 LLM 모델 |
 | paho-mqtt | MQTT 긴급정지 명령 전송 |
 | httpx | 대시보드 HTTP 알림 전송 |
-| psycopg2 | PostgreSQL 연결 |
-| PostgreSQL | 위협 분석 로그 저장 |
+| influxdb-client | InfluxDB 연결 |
+| InfluxDB | 위협 분석 로그 저장 (시계열 DB) |
 
 ### 파인튜닝
 | 기술 | 용도 |
