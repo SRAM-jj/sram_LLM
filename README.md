@@ -37,6 +37,26 @@
 
 ---
 
+## 구현 현황
+
+| 항목 | 상태 | 비고 |
+|------|------|------|
+| FastAPI 서버 + LLM 분석 | ✅ 검증 완료 | WARNING/DANGER/ERROR 모두 테스트 통과 |
+| 규칙 기반 레벨 보정 | ✅ 검증 완료 | joints 수치로 LLM 응답 강제 교정 |
+| MQTT 긴급정지 | ✅ 구현 완료 | 실 RPi 연동은 Ubuntu 배포 시 검증 필요 |
+| InfluxDB 저장 | ✅ 구현 완료 | Mac 개발 환경에서는 DB 없이도 서버 정상 작동 |
+| ROS 2 연동 (ros2_node.py) | 🔲 미검증 | ROS 2 환경 필요, Ubuntu 배포 시 검증 |
+| Tier3 대시보드 연동 | 🔲 미검증 | sram_backend 완성 후 연동 테스트 필요 |
+| GET /logs API | 🔲 미구현 | 팀 논의 후 추가 예정 |
+| LLM 파인튜닝 | 🔲 미구현 | Ubuntu RTX 4070 서버에서 추후 진행 |
+
+### 알려진 제한사항
+
+- **LLM JSON 파싱 실패 시**: LLM이 간혹 JSON 형식을 지키지 않으면 `parse_error` fallback으로 처리되고 DB 저장과 레벨 판단이 생략됨. 규칙 기반 보정이 후처리이므로 파싱 실패 시 보정도 불가.
+- **동시 요청 폭주 시**: Ollama는 단일 추론 큐이므로 ERROR 경보가 연속으로 몰리면 분석이 순서대로 지연됨. 정상 ROS 2 운용(순차 전송)에서는 문제 없음.
+
+---
+
 ## 위협 레벨 기준 (현재 수치는 임시값)
 
 `joints.efforts`(토크)와 `joints.temperatures`(온도) 기준으로 판단.

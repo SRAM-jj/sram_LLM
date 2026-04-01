@@ -8,8 +8,11 @@ __pycache__/
 *.pyc
 .DS_Store
 
-# 데이터셋
+# 데이터셋 (용량 큼)
 ai4i2020.csv
+datasheet/aursad.h5
+datasheet/ur3_cobotops.zip
+datasheet/ur3_cobotops/
 
 # 모델 파일 (용량 큼)
 sram_model/
