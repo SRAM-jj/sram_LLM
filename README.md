@@ -65,7 +65,8 @@ sram_llm/
 ├── datasheet/                 # 학습에 사용된 데이터셋 원본
 │   ├── lp1~lp5.data.txt       # UCI Robot Execution Failures (463 샘플)
 │   ├── ai4i2020.csv           # AI4I Predictive Maintenance (10,000행)
-│   └── ur5testresult_*.csv    # NIST UR5 로봇 암 데이터 (134,933행)
+│   ├── ur5testresult_*.csv    # NIST UR5 로봇 암 데이터 (134,933행)
+│   └── ur3_cobotops/          # UR3 CobotOps — 관절 전류/온도 + 이상 레이블 (7,409행, UCI)
 ├── training_data/             # 변환된 학습 데이터 (JSONL)
 │   ├── train.jsonl            # 훈련 데이터 6,813개
 │   └── valid.jsonl            # 검증 데이터 757개
@@ -485,10 +486,17 @@ mqtt_client.py # MQTT 긴급정지 전송
 RTX 4070 Ubuntu 서버에서 실제 데이터로 파인튜닝할 계획.
 
 **학습 데이터:**
-- `training_data/train.jsonl` — 6,813개 샘플
-- `training_data/valid.jsonl` — 757개 샘플
-- 데이터 출처: UCI Robot Failures + AI4I 2020 + NIST UR5
+- `training_data/train.jsonl` — 7,479개 샘플
+- `training_data/valid.jsonl` — 831개 샘플
+- 데이터 출처: UCI Robot Failures + AI4I 2020 + NIST UR5 + UR3 CobotOps (UCI)
 - 전부 절대기준 JSON 포맷으로 변환됨 (joints.efforts, joints.temperatures 기반)
+
+| 데이터셋 | 샘플 수 | 주요 이상 유형 |
+|---------|---------|-------------|
+| UCI Robot Failures (lp1~5) | 354개 | 그립/이동/언로딩 실패 |
+| AI4I 2020 Predictive Maintenance | 348개 | 공구 마모, 과열, 전력/과부하 |
+| NIST UR5 Robot Arm | 6,757개 | 관절 토크/온도 이상 |
+| UR3 CobotOps (UCI) | 851개 | 보호 정지(ERROR), 그립 손실(DANGER) |
 
 ### 파인튜닝 전체 파이프라인
 

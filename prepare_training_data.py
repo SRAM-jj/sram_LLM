@@ -4,6 +4,12 @@ import ast
 import random
 import os
 
+try:
+    import pandas as pd
+    HAS_PANDAS = True
+except ImportError:
+    HAS_PANDAS = False
+
 DATASHEET_DIR = os.path.join(os.path.dirname(__file__), "datasheet")
 
 JOINT_NAMES = ["base", "shoulder", "elbow", "wrist", "gripper"]
@@ -275,6 +281,78 @@ def ur5_to_training(sample_rate=0.05):
     return data
 
 
+# ── UR3 CobotOps 파싱 ─────────────────────────────────────────
+def ur3_cobotops_to_training(normal_sample_rate=0.05):
+    """
+    UR3 CobotOps (UCI): 관절별 전류(Current) + 온도(Temperature) → 절대기준 JSON 포맷
+    - Robot_ProtectiveStop = 1 → ERROR (로봇 안전 정지 발생)
+    - grip_lost = True        → DANGER (그립 손실)
+    - 정상 샘플               → 5% 샘플링 후 규칙 기반 레벨 판정
+    전류(A) × 7 → 토크 추정값(Nm)
+    """
+    if not HAS_PANDAS:
+        print("⚠️ pandas 미설치 — UR3 CobotOps 건너뜀 (pip install pandas openpyxl)")
+        return []
+
+    filepath = os.path.join(DATASHEET_DIR, "ur3_cobotops", "dataset_02052023.xlsx")
+    if not os.path.exists(filepath):
+        print("⚠️ UR3 CobotOps 파일 없음 — 건너뜀")
+        return []
+
+    df = pd.read_excel(filepath)
+    data = []
+    CURRENT_TO_NM = 7.0  # 전류(A) → 토크 추정(Nm) 변환 계수
+
+    for _, row in df.iterrows():
+        protective_stop = row["Robot_ProtectiveStop"] == 1.0
+        grip_lost       = row["grip_lost"] == True
+
+        # 정상 샘플은 샘플링
+        if not protective_stop and not grip_lost:
+            if random.random() > normal_sample_rate:
+                continue
+
+        # 관절 전류 → efforts (J0~J4, 5개 관절)
+        efforts = [
+            round(abs(row["Current_J0"]) * CURRENT_TO_NM, 2),
+            round(abs(row["Current_J1"]) * CURRENT_TO_NM, 2),
+            round(abs(row["Current_J2"]) * CURRENT_TO_NM, 2),
+            round(abs(row["Current_J3"]) * CURRENT_TO_NM, 2),
+            round(abs(row["Current_J4"]) * CURRENT_TO_NM, 2),
+        ]
+
+        # 관절 온도 (T0, J1~J4)
+        temperatures = [
+            round(float(row["Temperature_T0"]), 2),
+            round(float(row["Temperature_J1"]), 2),
+            round(float(row["Temperature_J2"]), 2),
+            round(float(row["Temperature_J3"]), 2),
+            round(float(row["Temperature_J4"]), 2),
+        ]
+
+        max_effort = max(efforts)
+        max_temp   = max(temperatures)
+
+        # 레이블 기반 레벨 결정 (규칙 기반 보정보다 레이블 우선)
+        if protective_stop:
+            level  = "ERROR"
+            cause  = f"Protective stop triggered. Joint current exceeded safe limits (max effort: {max_effort:.1f} Nm)."
+            action = "EMERGENCY STOP. Inspect all joints and check for mechanical obstruction."
+        elif grip_lost:
+            level  = "DANGER"
+            cause  = f"Grip lost during operation. Excessive joint load detected (max effort: {max_effort:.1f} Nm, max temp: {max_temp:.1f}°C)."
+            action = "Stop operation immediately. Inspect gripper mechanism and reduce payload."
+        else:
+            level  = get_threat_level(max_effort, max_temp)
+            cause  = f"Elevated joint temperature ({max_temp:.1f}°C) or torque ({max_effort:.1f} Nm) detected during normal operation."
+            action = "Monitor continuously and log for trend analysis."
+
+        input_data = make_router_json(random.choice(DEVICE_IDS), efforts, temperatures, level)
+        data.append(make_sample(input_data, level, cause, action))
+
+    return data
+
+
 # ── 메인 ──────────────────────────────────────────────────────
 def main():
     print("데이터 변환 시작 (절대기준 JSON 포맷)...\n")
@@ -282,12 +360,14 @@ def main():
     lp_data   = lp_to_training(parse_lp_files())
     ai4i_data = ai4i_to_training()
     ur5_data  = ur5_to_training(sample_rate=0.05)
+    ur3_data  = ur3_cobotops_to_training(normal_sample_rate=0.05)
 
-    print(f"lp 데이터:   {len(lp_data)}개")
-    print(f"AI4I 데이터: {len(ai4i_data)}개")
-    print(f"UR5 데이터:  {len(ur5_data)}개")
+    print(f"lp 데이터:        {len(lp_data)}개")
+    print(f"AI4I 데이터:      {len(ai4i_data)}개")
+    print(f"UR5 데이터:       {len(ur5_data)}개")
+    print(f"UR3 CobotOps:     {len(ur3_data)}개")
 
-    all_data = lp_data + ai4i_data + ur5_data
+    all_data = lp_data + ai4i_data + ur5_data + ur3_data
     random.shuffle(all_data)
 
     split      = int(len(all_data) * 0.9)
