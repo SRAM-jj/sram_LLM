@@ -67,8 +67,8 @@ sram_llm/
 │   ├── ai4i2020.csv           # AI4I Predictive Maintenance (10,000행)
 │   └── ur5testresult_*.csv    # NIST UR5 로봇 암 데이터 (134,933행)
 ├── training_data/             # 변환된 학습 데이터 (JSONL)
-│   ├── train.jsonl            # 훈련 데이터 6,653개
-│   └── valid.jsonl            # 검증 데이터 740개
+│   ├── train.jsonl            # 훈련 데이터 6,813개
+│   └── valid.jsonl            # 검증 데이터 757개
 └── adapters/                  # LoRA 파인튜닝 결과물
 ```
 
@@ -79,43 +79,54 @@ sram_llm/
 ### 분석 흐름
 
 ```
-센서 데이터 수신 (force_x_max, torque_x_min, error_type 등)
-        │
-        ▼
-  프롬프트 생성 (Few-shot 예시 포함)
-        │
-        ▼
+Raspberry Pi filter_node
+  Safe  → /safe_bulk_data  → 로그만 기록 (분석·DB 저장 없음)
+  그 외 → /alert_danger    → LLM 분석
+          /alert_error     → LLM 분석
+                │
+                ▼
+  ros2_node.py (llm_analyzer_node) 수신
+                │
+                ▼
+  절대기준 JSON → 프롬프트 생성 (Few-shot 예시 포함)
+                │
+                ▼
   Ollama LLM 분석 (llama3.1:8b)
-        │
-        ▼
+                │
+                ▼
   JSON 파싱 (threat, level, cause, action)
-        │
-        ▼
-  규칙 기반 레벨 보정 ← force_x_max 기준으로 레벨 강제 덮어쓰기
-        │
-        ▼
-  결과 반환 + DB 저장 + 필요 시 긴급정지
+                │
+                ▼
+  규칙 기반 레벨 보정 ← joints 수치로 강제 덮어쓰기
+                │
+                ▼
+  결과 반환 + DB 저장 + 필요 시 MQTT 긴급정지
 ```
 
-### 규칙 기반 보정 필요한 이유
+> Safe 데이터는 라우터에서 이미 정상으로 판단한 것 → LLM 분석 불필요, DB에도 저장 안 함
+
+### 규칙 기반 보정이 필요한 이유
 
 LLM은 확률 기반이라 같은 입력이라도 레벨을 다르게 판단할 수 있음.
-`force_x_max` 수치는 명확한 기준이 있으므로, LLM 응답과 관계없이
-코드에서 강제로 레벨을 덮어씌워 일관성을 보장함.
+`joints.efforts`(토크), `joints.temperatures`(온도)는 명확한 수치 기준이 있으므로
+LLM 응답과 관계없이 코드에서 강제로 레벨을 덮어씌워 일관성을 보장함.
 
 ```python
 # server.py — 규칙 기반 레벨 보정
-if force_x_max < 100:
-    result["level"] = "WARNING"
-elif force_x_max < 180:
+max_effort = max(joints.get("efforts", [0]))
+max_temp   = max(joints.get("temperatures", [0]))
+
+if max_temp > 45 or max_effort > 50:
+    result["level"] = "ERROR"
+elif max_temp > 40 or max_effort > 30:
     result["level"] = "DANGER"
 else:
-    result["level"] = "ERROR"
+    result["level"] = "WARNING"
 ```
 
 ### 프롬프트 구조
 
-Few-shot 방식 — 예시 3개(WARNING/DANGER/ERROR)를 프롬프트에 포함해
+Few-shot 방식 — WARNING/DANGER/ERROR 예시 3개를 프롬프트에 포함해
 LLM이 원인(cause)과 조치(action)를 올바른 형식으로 반환하도록 유도.
 레벨 자체는 규칙 기반으로 보정되므로, LLM은 원인/조치 문장 생성에 집중.
 
@@ -474,9 +485,10 @@ mqtt_client.py # MQTT 긴급정지 전송
 RTX 4070 Ubuntu 서버에서 실제 데이터로 파인튜닝할 계획.
 
 **학습 데이터:**
-- `training_data/train.jsonl` — 6,653개 샘플
-- `training_data/valid.jsonl` — 740개 샘플
+- `training_data/train.jsonl` — 6,813개 샘플
+- `training_data/valid.jsonl` — 757개 샘플
 - 데이터 출처: UCI Robot Failures + AI4I 2020 + NIST UR5
+- 전부 절대기준 JSON 포맷으로 변환됨 (joints.efforts, joints.temperatures 기반)
 
 ### 파인튜닝 전체 파이프라인
 
