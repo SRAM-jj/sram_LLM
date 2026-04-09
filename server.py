@@ -101,52 +101,75 @@ def notify_dashboard(result: dict):
         pass
 
 # ── API ───────────────────────────────────────────────────────
+def rule_based_level(joints: dict) -> str:
+    efforts = joints.get("efforts", [])
+    temperatures = joints.get("temperatures", [])
+    max_effort = max(efforts) if efforts else 0
+    max_temp = max(temperatures) if temperatures else 0
+
+    if max_temp > 45 or max_effort > 50:
+        return "ERROR"
+    elif max_temp > 40 or max_effort > 30:
+        return "DANGER"
+    else:
+        return "WARNING"
+
 @app.post("/analyze")
 async def analyze(error: ErrorData):
     prompt = build_prompt(error.data)
-
+    joints = error.data.get("joints", {})
     loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(
-        None,
-        lambda: ollama.chat(
-            model=LLM_MODEL,
-            messages=[{"role": "user", "content": prompt}]
-        )
-    )
 
-    raw = response["message"]["content"]
-
-    try:
-        clean = raw.strip()
-        clean = clean.replace("```json", "").replace("```", "").strip()
+    def parse_llm_response(raw: str) -> dict | None:
+        clean = raw.strip().replace("```json", "").replace("```", "").strip()
         if "}" in clean:
             clean = clean[:clean.rfind("}")+1]
-        result = json.loads(clean)
+        try:
+            return json.loads(clean)
+        except json.JSONDecodeError:
+            return None
 
+    # LLM 호출 + JSON 파싱 (최대 1회 재시도)
+    raw = None
+    result = None
+    for attempt in range(2):
+        response = await loop.run_in_executor(
+            None,
+            lambda: ollama.chat(
+                model=LLM_MODEL,
+                messages=[{"role": "user", "content": prompt}]
+            )
+        )
+        raw = response["message"]["content"]
+        result = parse_llm_response(raw)
+        if result is not None:
+            break
+        logger.warning(f"⚠️  LLM JSON 파싱 실패 (시도 {attempt + 1}){' — 재시도 중...' if attempt == 0 else ''}")
+
+    if result is not None:
         result["input"] = error.data
-
         # 규칙 기반 레벨 보정 (joints 데이터 기준)
-        joints = error.data.get("joints", {})
-        efforts = joints.get("efforts", [])
-        temperatures = joints.get("temperatures", [])
-        max_effort = max(efforts) if efforts else 0
-        max_temp = max(temperatures) if temperatures else 0
-
-        if max_temp > 45 or max_effort > 50:
-            result["level"] = "ERROR"
-        elif max_temp > 40 or max_effort > 30:
-            result["level"] = "DANGER"
-        else:
-            result["level"] = "WARNING"
-
-        level = result.get("level", "UNKNOWN")
+        result["level"] = rule_based_level(joints)
+        level = result["level"]
         handle_threat_level(level, result)
         save_to_db(level, result, error.data)
+        return result
 
-    except json.JSONDecodeError:
-        result = {"raw": raw, "parse_error": "LLM did not return valid JSON"}
-
-    return result
+    # 최종 fallback — 규칙 기반 단독 판단
+    logger.error("🔁 LLM JSON 파싱 2회 실패 — 규칙 기반 fallback 적용")
+    level = rule_based_level(joints)
+    fallback = {
+        "threat": level != "SAFE",
+        "level": level,
+        "cause": "LLM parse error — rule-based fallback applied.",
+        "action": "Check LLM output format.",
+        "raw": raw,
+        "parse_error": "LLM did not return valid JSON after 1 retry.",
+        "input": error.data
+    }
+    handle_threat_level(level, fallback)
+    save_to_db(level, fallback, error.data)
+    return fallback
 
 @app.post("/emergency_stop")
 async def emergency_stop_endpoint():
