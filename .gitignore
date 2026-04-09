@@ -1,6 +1,9 @@
 # 환경변수 (IP 주소 등 민감 정보)
 .env
 
+# 보안 자격증명
+github-recovery-codes.txt
+
 # Python
 venv/
 venv_new/
