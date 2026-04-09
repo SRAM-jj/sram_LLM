@@ -129,7 +129,7 @@ async def analyze(error: ErrorData):
         except json.JSONDecodeError:
             return None
 
-    # LLM 호출 + JSON 파싱 (최대 2회)
+    # LLM 호출 + JSON 파싱 (최대 1회 재시도)
     raw = None
     result = None
     for attempt in range(2):
@@ -144,7 +144,7 @@ async def analyze(error: ErrorData):
         result = parse_llm_response(raw)
         if result is not None:
             break
-        logger.warning(f"⚠️  LLM JSON 파싱 실패 (시도 {attempt + 1}/2){' — 재시도 중...' if attempt == 0 else ''}")
+        logger.warning(f"⚠️  LLM JSON 파싱 실패 (시도 {attempt + 1}){' — 재시도 중...' if attempt == 0 else ''}")
 
     if result is not None:
         result["input"] = error.data
@@ -164,7 +164,7 @@ async def analyze(error: ErrorData):
         "cause": "LLM parse error — rule-based fallback applied.",
         "action": "Check LLM output format.",
         "raw": raw,
-        "parse_error": "LLM did not return valid JSON after 2 attempts.",
+        "parse_error": "LLM did not return valid JSON after 1 retry.",
         "input": error.data
     }
     handle_threat_level(level, fallback)
