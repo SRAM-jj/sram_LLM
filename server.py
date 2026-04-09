@@ -101,6 +101,8 @@ def notify_dashboard(result: dict):
         pass
 
 # ── API ───────────────────────────────────────────────────────
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "10"))  # 초 단위, 기본 10초
+
 def rule_based_level(joints: dict) -> str:
     efforts = joints.get("efforts", [])
     temperatures = joints.get("temperatures", [])
@@ -129,17 +131,25 @@ async def analyze(error: ErrorData):
         except json.JSONDecodeError:
             return None
 
-    # LLM 호출 + JSON 파싱 (최대 1회 재시도)
+    # LLM 호출 + JSON 파싱 (최대 1회 재시도, 타임아웃 적용)
     raw = None
     result = None
     for attempt in range(2):
-        response = await loop.run_in_executor(
-            None,
-            lambda: ollama.chat(
-                model=LLM_MODEL,
-                messages=[{"role": "user", "content": prompt}]
+        try:
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: ollama.chat(
+                        model=LLM_MODEL,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                ),
+                timeout=LLM_TIMEOUT
             )
-        )
+        except asyncio.TimeoutError:
+            logger.warning(f"⏱️  LLM 응답 {LLM_TIMEOUT}초 초과 (시도 {attempt + 1}){' — 재시도 중...' if attempt == 0 else ' — 규칙 기반 fallback 적용'}")
+            continue
+
         raw = response["message"]["content"]
         result = parse_llm_response(raw)
         if result is not None:
@@ -156,17 +166,18 @@ async def analyze(error: ErrorData):
         return result
 
     # 최종 fallback — 규칙 기반 단독 판단
-    logger.error("🔁 LLM JSON 파싱 2회 실패 — 규칙 기반 fallback 적용")
+    logger.error("🔁 LLM 실패 — 규칙 기반 fallback 적용")
     level = rule_based_level(joints)
     fallback = {
         "threat": level != "SAFE",
         "level": level,
-        "cause": "LLM parse error — rule-based fallback applied.",
-        "action": "Check LLM output format.",
-        "raw": raw,
-        "parse_error": "LLM did not return valid JSON after 1 retry.",
+        "cause": "LLM unavailable — rule-based fallback applied.",
+        "action": "Check LLM service and output format.",
         "input": error.data
     }
+    if raw:
+        fallback["raw"] = raw
+        fallback["parse_error"] = "LLM did not return valid JSON after 1 retry."
     handle_threat_level(level, fallback)
     save_to_db(level, fallback, error.data)
     return fallback
