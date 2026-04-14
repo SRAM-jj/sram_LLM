@@ -32,6 +32,7 @@ sram_router의 filter_node가 분류한 데이터를 수신함.
 }
 """
 
+import os
 import json
 import logging
 import httpx
@@ -39,7 +40,8 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-LLM_SERVER_URL = "http://localhost:8000/analyze"
+LLM_SERVER_URL = os.getenv("LLM_SERVER_URL", "http://localhost:8000/analyze")
+LLM_API_KEY    = os.getenv("API_KEY", "")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("S.RAM! ROS2")
@@ -65,9 +67,11 @@ class LLMAnalyzerNode(Node):
             state = data.get("status", {}).get("state", "unknown")
             self.get_logger().info(f"📨 수신: {device_id} / state={state}")
 
+            headers = {"X-API-Key": LLM_API_KEY} if LLM_API_KEY else {}
             response = httpx.post(
                 LLM_SERVER_URL,
                 json={"data": data},
+                headers=headers,
                 timeout=30
             )
             result = response.json()

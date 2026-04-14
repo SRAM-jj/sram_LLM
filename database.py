@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import logging
 from datetime import datetime, timezone
 from influxdb_client import InfluxDBClient, Point
@@ -7,10 +8,21 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 
 logger = logging.getLogger("S.RAM!")
 
+VALID_STATES = {"SAFE", "WARNING", "DANGER", "ERROR"}
+DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
 INFLUX_URL    = os.getenv("INFLUX_URL",    "http://localhost:8086")
 INFLUX_TOKEN  = os.getenv("INFLUX_TOKEN",  "")
 INFLUX_ORG    = os.getenv("INFLUX_ORG",    "sram")
 INFLUX_BUCKET = os.getenv("INFLUX_BUCKET", "threat_logs")
+
+
+def _sanitize_device_id(value: str) -> str:
+    return value if DEVICE_ID_PATTERN.match(value) else "unknown"
+
+def _sanitize_state(value: str) -> str:
+    upper = value.upper()
+    return upper if upper in VALID_STATES else "unknown"
 
 
 def get_client():
@@ -19,6 +31,8 @@ def get_client():
 
 def init_db():
     """InfluxDB 연결 확인 (버킷은 InfluxDB UI 또는 CLI에서 미리 생성 필요)"""
+    if not INFLUX_TOKEN:
+        raise RuntimeError("INFLUX_TOKEN 환경변수가 설정되지 않았습니다. .env 파일을 확인하세요.")
     try:
         with get_client() as client:
             health = client.health()
@@ -40,9 +54,9 @@ def save_to_db(level: str, result: dict, input_data: dict):
         point = (
             Point("threat_logs")
             # Tags (인덱싱 — 필터링/그룹화에 사용)
-            .tag("device_id", input_data.get("device_id", "unknown"))
+            .tag("device_id", _sanitize_device_id(input_data.get("device_id", "unknown")))
             .tag("level",     level)
-            .tag("state",     input_data.get("status", {}).get("state", "unknown"))
+            .tag("state",     _sanitize_state(input_data.get("status", {}).get("state", "unknown")))
             # Fields (실제 측정값)
             .field("max_effort", max(efforts)      if efforts      else 0.0)
             .field("max_temp",   max(temperatures) if temperatures else 0.0)
