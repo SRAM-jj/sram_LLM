@@ -78,6 +78,91 @@ def make_sample(input_data, level, cause, action):
     }
 
 
+def generate_cause_action(efforts, temperatures, level, context=""):
+    """관절별 구체적 원인 분석 및 단계별 조치 생성"""
+    max_e_idx = efforts.index(max(efforts))
+    max_t_idx = temperatures.index(max(temperatures))
+    max_e = efforts[max_e_idx]
+    max_t = temperatures[max_t_idx]
+    e_joint = JOINT_NAMES[max_e_idx]
+    t_joint = JOINT_NAMES[max_t_idx]
+
+    high_torque = max_e > 30
+    high_temp = max_t > 40
+
+    if level == "ERROR":
+        causes = [
+            f"Critical overload on {e_joint} joint: torque {max_e:.1f} Nm far exceeds safe limit (50 Nm). {t_joint} joint temperature at {max_t:.1f}°C. Likely cause: collision with obstacle or mechanical seizure.",
+            f"Emergency condition detected. {e_joint} joint torque ({max_e:.1f} Nm) indicates possible collision or structural failure. {t_joint} joint thermal stress at {max_t:.1f}°C suggests motor overload.",
+            f"Severe anomaly on {e_joint} joint ({max_e:.1f} Nm). Combined with {t_joint} joint temperature of {max_t:.1f}°C, this indicates potential mechanical binding, payload overload, or gearbox failure.",
+        ]
+        actions = [
+            f"EMERGENCY STOP immediately. 1) Disconnect power to {e_joint} joint. 2) Clear workspace and inspect for collision damage. 3) Wait for {t_joint} joint to cool below 35°C. 4) Check {e_joint} gearbox and motor windings for damage. 5) Run full calibration before resuming.",
+            f"EMERGENCY STOP. 1) Power off all joint motors. 2) Inspect {e_joint} joint for mechanical obstruction or damage. 3) Verify payload weight does not exceed rated capacity. 4) Check {t_joint} joint cooling system. 5) Perform full system diagnostic before restart.",
+            f"EMERGENCY STOP required. 1) Isolate {e_joint} joint from power. 2) Document current joint positions and sensor readings. 3) Inspect {e_joint} for physical damage or foreign objects. 4) Check {t_joint} bearing lubrication. 5) Do not resume until maintenance confirms safe operation.",
+        ]
+    elif level == "DANGER":
+        if high_torque and high_temp:
+            causes = [
+                f"High load on {e_joint} joint ({max_e:.1f} Nm) approaching critical threshold. {t_joint} joint temperature ({max_t:.1f}°C) rising dangerously. Risk of permanent joint damage if operation continues.",
+                f"Dual risk detected: {e_joint} joint torque at {max_e:.1f} Nm and {t_joint} joint temperature at {max_t:.1f}°C both trending toward critical levels. Possible cause: excessive payload or prolonged high-duty operation.",
+            ]
+            actions = [
+                f"1) Reduce operating speed by 50% immediately. 2) Decrease payload if possible. 3) Monitor {e_joint} torque and {t_joint} temperature every 30 seconds. 4) If {t_joint} exceeds 43°C, initiate controlled shutdown. 5) Schedule {e_joint} joint maintenance inspection.",
+                f"1) Slow robot to minimum operational speed. 2) Check {e_joint} joint for unusual vibration or noise. 3) Allow {t_joint} joint 5-minute cooling period between cycles. 4) Log all sensor readings for trend analysis. 5) Prepare for controlled shutdown if values increase.",
+            ]
+        elif high_torque:
+            causes = [
+                f"Elevated torque on {e_joint} joint ({max_e:.1f} Nm) approaching danger threshold. Potential causes: increased friction in joint mechanism, partial workspace obstruction, or payload shift during operation.",
+                f"{e_joint} joint torque ({max_e:.1f} Nm) significantly above normal operating range. May indicate mechanical wear, misalignment, or gradual bearing degradation.",
+            ]
+            actions = [
+                f"1) Reduce speed and payload immediately. 2) Verify {e_joint} joint workspace is clear. 3) Monitor {e_joint} torque trend for next 5 minutes. 4) Check joint lubrication and mechanical alignment. 5) If torque does not decrease, perform controlled stop.",
+                f"1) Decrease operational speed by 30-50%. 2) Inspect {e_joint} joint for signs of wear or damage. 3) Verify payload is properly secured and within limits. 4) Schedule preventive maintenance for {e_joint} joint. 5) Initiate shutdown if torque exceeds 45 Nm.",
+            ]
+        else:
+            causes = [
+                f"Elevated temperature on {t_joint} joint ({max_t:.1f}°C) approaching critical threshold (45°C). Likely cause: sustained high-duty operation without adequate cooling or early bearing degradation.",
+                f"{t_joint} joint temperature ({max_t:.1f}°C) above normal operating range. Possible causes: insufficient cooling airflow, high ambient temperature, or increased internal friction.",
+            ]
+            actions = [
+                f"1) Reduce operation duty cycle immediately. 2) Allow {t_joint} joint 5-minute cooling between cycles. 3) Check ventilation and cooling system around {t_joint} joint. 4) Monitor temperature trend. 5) Initiate controlled shutdown if temperature exceeds 43°C.",
+                f"1) Lower operating speed to reduce heat generation. 2) Verify {t_joint} joint cooling fan is operational. 3) Check ambient temperature and improve ventilation if possible. 4) Inspect {t_joint} bearings for excess friction. 5) Schedule thermal inspection.",
+            ]
+    else:  # WARNING
+        torque_concern = max_e > max_t * 0.4
+        if torque_concern:
+            causes = [
+                f"Moderate torque increase on {e_joint} joint ({max_e:.1f} Nm). Within safe limits but above normal baseline. May indicate early signs of mechanical wear or slight payload imbalance.",
+                f"Minor torque anomaly detected on {e_joint} joint ({max_e:.1f} Nm). All values within operational limits. Could be caused by payload variation, surface friction change, or normal wear progression.",
+                f"{e_joint} joint showing elevated effort ({max_e:.1f} Nm) compared to typical operation. No immediate risk, but pattern may indicate developing mechanical issue.",
+            ]
+            actions = [
+                f"1) Log {e_joint} joint torque for trend analysis. 2) Monitor over next operating hour. 3) Verify payload alignment and weight. 4) Schedule preventive maintenance if upward trend continues.",
+                f"1) Record current sensor readings. 2) Compare {e_joint} joint torque with historical baseline. 3) Check payload securing mechanism. 4) Continue normal operation with increased monitoring frequency.",
+                f"1) Continue operation with monitoring. 2) Track {e_joint} joint torque readings over next 10 cycles. 3) Flag for maintenance review if readings increase by more than 10%. 4) Verify work environment conditions.",
+            ]
+        else:
+            causes = [
+                f"Slight temperature elevation on {t_joint} joint ({max_t:.1f}°C). Within safe operating range but trending upward. May indicate increased operational load or ambient temperature change.",
+                f"Minor thermal increase detected on {t_joint} joint ({max_t:.1f}°C). No immediate concern. Possible causes: higher duty cycle, ambient conditions, or gradual bearing wear.",
+                f"{t_joint} joint temperature ({max_t:.1f}°C) slightly above normal baseline. All joints operating within safe limits. Routine monitoring recommended.",
+            ]
+            actions = [
+                f"1) Log {t_joint} joint temperature for trend analysis. 2) Monitor over next operating cycle. 3) Check ambient temperature and cooling airflow. 4) Schedule bearing inspection if trend persists.",
+                f"1) Record temperature readings for analysis. 2) Verify {t_joint} joint cooling is unobstructed. 3) Continue normal operation. 4) Review temperature logs at end of shift.",
+                f"1) Continue operation with routine monitoring. 2) Track {t_joint} temperature over next hour. 3) Ensure adequate ventilation around robot arm. 4) No immediate action required.",
+            ]
+
+    cause = random.choice(causes)
+    action = random.choice(actions)
+
+    if context:
+        cause += f" {context}"
+
+    return cause, action
+
+
 # ── lp1~lp5 파싱 ──────────────────────────────────────────────
 def parse_lp_files():
     samples = []
@@ -159,15 +244,10 @@ def lp_to_training(samples):
 
         level = get_threat_level(max_effort, max_temp)
 
-        if level == "WARNING":
-            cause = f"Moderate {s['label']} during {s['failure_type']}. Shoulder effort at {max_effort:.1f} Nm."
-            action = "Monitor continuously and log for trend analysis."
-        elif level == "DANGER":
-            cause = f"High effort ({max_effort:.1f} Nm) detected during {s['failure_type']}. Risk of joint damage."
-            action = "Reduce speed and payload. Inspect joint mechanisms."
-        else:
-            cause = f"Critical effort ({max_effort:.1f} Nm) during {s['failure_type']}. Risk of permanent damage."
-            action = "EMERGENCY STOP. Disconnect power and perform full system diagnostic."
+        cause, action = generate_cause_action(
+            efforts, temperatures, level,
+            context=f"Detected during {s['failure_type']} ({s['label']})."
+        )
 
         input_data = make_router_json(random.choice(DEVICE_IDS), efforts, temperatures, level)
         data.append(make_sample(input_data, level, cause, action))
@@ -225,6 +305,11 @@ def ai4i_to_training():
             max_temp   = max(temperatures)
             level = get_threat_level(max_effort, max_temp)
 
+            cause, action = generate_cause_action(
+                efforts, temperatures, level,
+                context=f"Failure type: {active} (AI4I predictive maintenance)."
+            )
+
             input_data = make_router_json(random.choice(DEVICE_IDS), efforts, temperatures, level)
             data.append(make_sample(input_data, level, cause, action))
     return data
@@ -264,15 +349,10 @@ def ur5_to_training(sample_rate=0.05):
                     max_temp   = max(temperatures)
                     level      = get_threat_level(max_effort, max_temp)
 
-                    if level == "ERROR":
-                        cause  = f"Critical joint torque ({max_effort:.1f} Nm) or temperature ({max_temp:.1f}°C) exceeded safe limits during {condition}."
-                        action = "EMERGENCY STOP. Cool down joints and inspect mechanical components."
-                    elif level == "DANGER":
-                        cause  = f"High joint torque ({max_effort:.1f} Nm) or temperature ({max_temp:.1f}°C) approaching critical limits during {condition}."
-                        action = "Reduce speed and payload. Monitor temperature continuously."
-                    else:
-                        cause  = f"Elevated joint torque ({max_effort:.1f} Nm) detected during {condition} operation."
-                        action = "Monitor system and log for trend analysis."
+                    cause, action = generate_cause_action(
+                        efforts, temperatures, level,
+                        context=f"Condition: {condition} (UR5 test data)."
+                    )
 
                     input_data = make_router_json(random.choice(DEVICE_IDS), efforts, temperatures, level)
                     data.append(make_sample(input_data, level, cause, action))
@@ -335,20 +415,105 @@ def ur3_cobotops_to_training(normal_sample_rate=0.05):
 
         # 레이블 기반 레벨 결정 (규칙 기반 보정보다 레이블 우선)
         if protective_stop:
-            level  = "ERROR"
-            cause  = f"Protective stop triggered. Joint current exceeded safe limits (max effort: {max_effort:.1f} Nm)."
-            action = "EMERGENCY STOP. Inspect all joints and check for mechanical obstruction."
+            level = "ERROR"
+            ctx = "Robot protective stop triggered (UR3 CobotOps)."
         elif grip_lost:
-            level  = "DANGER"
-            cause  = f"Grip lost during operation. Excessive joint load detected (max effort: {max_effort:.1f} Nm, max temp: {max_temp:.1f}°C)."
-            action = "Stop operation immediately. Inspect gripper mechanism and reduce payload."
+            level = "DANGER"
+            ctx = "Grip lost during operation. Gripper mechanism failure detected (UR3 CobotOps)."
         else:
-            level  = get_threat_level(max_effort, max_temp)
-            cause  = f"Elevated joint temperature ({max_temp:.1f}°C) or torque ({max_effort:.1f} Nm) detected during normal operation."
-            action = "Monitor continuously and log for trend analysis."
+            level = get_threat_level(max_effort, max_temp)
+            ctx = "Normal operation monitoring (UR3 CobotOps)."
+
+        cause, action = generate_cause_action(efforts, temperatures, level, context=ctx)
 
         input_data = make_router_json(random.choice(DEVICE_IDS), efforts, temperatures, level)
         data.append(make_sample(input_data, level, cause, action))
+
+    return data
+
+
+# ── voraus-AD 파싱 ────────────────────────────────────────────
+def voraus_to_training(sample_rate=0.03):
+    """
+    voraus-AD: motor_torque(5관절) → efforts, temp_est → temperatures
+    6-DOF 협동로봇 데이터를 5관절(S.RAM! 기준)으로 변환
+    토크 스케일 보정: voraus-AD 로봇 → S.RAM! 로봇 (×0.35)
+    이상 샘플: sample_rate 적용, 정상 샘플: sample_rate × 0.1
+    """
+    if not HAS_PANDAS:
+        print("⚠️ pandas 미설치 — voraus-AD 건너뜀")
+        return []
+
+    combined_dir = os.path.join(DATASHEET_DIR, "sram_combined")
+    if not os.path.exists(combined_dir):
+        print("⚠️ sram_combined 디렉토리 없음 — 건너뜀")
+        return []
+
+    voraus_files = sorted(
+        f for f in os.listdir(combined_dir)
+        if f.startswith("voraus_ad_part") and f.endswith(".csv")
+    )
+    if not voraus_files:
+        print("⚠️ voraus-AD 파일 없음 — 건너뜀")
+        return []
+
+    TORQUE_SCALE = 0.35  # voraus-AD → S.RAM! 토크 스케일 보정
+
+    needed_cols = (
+        [f"motor_torque_{j}" for j in range(1, 6)] +
+        [f"temp_est_{j}" for j in range(1, 6)] +
+        ["anomaly", "category", "label"]
+    )
+
+    data = []
+    for filename in voraus_files:
+        filepath = os.path.join(combined_dir, filename)
+        df = pd.read_csv(filepath, usecols=needed_cols)
+
+        # 이상 샘플과 정상 샘플 분리 샘플링
+        anom_df = df[df["label"] != "normal"].sample(
+            frac=sample_rate, random_state=42
+        )
+        norm_df = df[df["label"] == "normal"].sample(
+            frac=sample_rate * 0.1, random_state=42
+        )
+        sampled = pd.concat([anom_df, norm_df])
+
+        for _, row in sampled.iterrows():
+            efforts = [
+                round(abs(row[f"motor_torque_{j}"]) * TORQUE_SCALE, 2)
+                for j in range(1, 6)
+            ]
+            temperatures = [
+                round(row[f"temp_est_{j}"], 2)
+                for j in range(1, 6)
+            ]
+
+            max_effort = max(efforts)
+            max_temp = max(temperatures)
+
+            # voraus-AD 자체 anomaly 레이블 우선 사용 (스케일 차이 보정)
+            csv_label = row["label"]
+            if csv_label == "error":
+                level = "ERROR"
+            elif csv_label == "danger":
+                level = "DANGER"
+            else:
+                level = "WARNING"
+
+            category = int(row["category"])
+
+            cause, action = generate_cause_action(
+                efforts, temperatures, level,
+                context=f"Anomaly pattern {category} during pick-and-place (voraus-AD)."
+            )
+
+            input_data = make_router_json(
+                random.choice(DEVICE_IDS), efforts, temperatures, level
+            )
+            data.append(make_sample(input_data, level, cause, action))
+
+        print(f"  {filename}: {len(sampled)}개 샘플")
 
     return data
 
@@ -362,12 +527,15 @@ def main():
     ur5_data  = ur5_to_training(sample_rate=0.05)
     ur3_data  = ur3_cobotops_to_training(normal_sample_rate=0.05)
 
+    voraus_data = voraus_to_training(sample_rate=0.03)
+
     print(f"lp 데이터:        {len(lp_data)}개")
     print(f"AI4I 데이터:      {len(ai4i_data)}개")
     print(f"UR5 데이터:       {len(ur5_data)}개")
     print(f"UR3 CobotOps:     {len(ur3_data)}개")
+    print(f"voraus-AD:        {len(voraus_data)}개")
 
-    all_data = lp_data + ai4i_data + ur5_data + ur3_data
+    all_data = lp_data + ai4i_data + ur5_data + ur3_data + voraus_data
     random.shuffle(all_data)
 
     split      = int(len(all_data) * 0.9)
