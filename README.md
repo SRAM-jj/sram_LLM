@@ -45,10 +45,10 @@
 | 규칙 기반 레벨 보정 | ✅ 검증 완료 | joints 수치로 LLM 응답 강제 교정 |
 | MQTT 긴급정지 | ✅ 구현 완료 | 실 RPi 연동은 Ubuntu 배포 시 검증 필요 |
 | InfluxDB 저장 | ✅ 구현 완료 | Mac 개발 환경에서는 DB 없이도 서버 정상 작동 |
-| ROS 2 연동 (ros2_node.py) | 🔲 미검증 | ROS 2 환경 필요, Ubuntu 배포 시 검증 |
-| Tier3 대시보드 연동 | 🔲 미검증 | sram_backend 완성 후 연동 테스트 필요 |
-| GET /logs API | 🔲 미구현 | 팀 논의 후 추가 예정 |
-| LLM 파인튜닝 | 🔲 미구현 | Ubuntu RTX 4070 서버에서 추후 진행 |
+| ROS 2 연동 (ros2_node.py) | ✅ 구현 완료 | ROS 2 환경, Ubuntu 배포 시 검증 |
+| Tier3 대시보드 연동 | ✅ 구현 완료 | sram_backend 완성 후 연동 테스트  |
+| GET /logs API | ✅ 구현 완료 | 팀 논의 후 추가 예정 |
+| LLM 파인튜닝 | ✅ 구현 완료 | Ubuntu RTX 4070 서버에서 진행 |
 
 ### 알려진 제한사항
 
